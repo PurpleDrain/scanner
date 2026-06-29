@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document Scanner PoC</title>
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>Document Scanner PoC</h1>
+        <p>Detects a document's edges and outlines them live, using OpenCV.js.</p>
+      </header>
+
+      <div class="mode-toggle">
+        <button id="mode-webcam" class="active" type="button">Webcam</button>
+        <button id="mode-upload" type="button">Upload Image</button>
+      </div>
+
+      <p id="status">Loading OpenCV.js&hellip;</p>
+
+      <section id="webcam-panel" class="panel">
+        <div class="stage">
+          <video id="video" autoplay muted playsinline></video>
+          <canvas id="overlay-canvas"></canvas>
+        </div>
+        <button id="capture-btn" type="button" disabled>Capture &amp; Flatten</button>
+      </section>
+
+      <section id="upload-panel" class="panel hidden">
+        <input id="file-input" type="file" accept="image/*" />
+        <div class="stage">
+          <canvas id="upload-canvas"></canvas>
+        </div>
+      </section>
+
+      <section id="result-panel" class="hidden">
+        <h2>Flattened Result</h2>
+        <canvas id="result-canvas"></canvas>
+        <a id="download-link" download="scanned-document.png">Download PNG</a>
+      </section>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
