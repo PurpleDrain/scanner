@@ -1,20 +1,27 @@
 import type { CV, Mat as CvMat } from "@techstark/opencv-js";
+import { detectQuad } from "./detection/detectDocument";
+import { orderCorners } from "./detection/geometry";
+import type { Point, Quad } from "./detection/types";
 
-export interface Point {
-  x: number;
-  y: number;
-}
-
-/** The four corners of a detected document, in [top-left, top-right, bottom-right, bottom-left] order. */
-export type Quad = [Point, Point, Point, Point];
+export type { Point, Quad } from "./detection/types";
+export { orderCorners } from "./detection/geometry";
 
 const MIN_AREA_FRACTION = 0.1;
 
 /**
- * Detects the largest quadrilateral in the image, assumed to be the document.
- * Returns null if no suitable 4-point contour is found.
+ * Detects the document quadrilateral in the image, in source coordinates, or null.
+ *
+ * Delegates to the full color-aware, multi-scale detection pipeline (`src/detection`), falling
+ * back to simple contour detection for high-contrast documents that already fill the frame (no
+ * border to vote on). For live-preview detection with confidence/timings/debug, call
+ * `detectDocument` from `src/detection/detectDocument` directly.
  */
 export function findDocumentQuad(cv: CV, src: CvMat): Quad | null {
+  return detectQuad(cv, src, { mode: "full" }) ?? findQuadByContour(cv, src);
+}
+
+/** Contour-based fallback: grayscale → blur → Canny → dilate → largest convex 4-point contour. */
+function findQuadByContour(cv: CV, src: CvMat): Quad | null {
   const imageArea = src.rows * src.cols;
   const gray = new cv.Mat();
   const blurred = new cv.Mat();
@@ -29,7 +36,6 @@ export function findDocumentQuad(cv: CV, src: CvMat): Quad | null {
     cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
     cv.Canny(blurred, edged, 50, 150);
     cv.dilate(edged, dilated, kernel);
-
     cv.findContours(dilated, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
 
     let best: Quad | null = null;
@@ -72,19 +78,6 @@ function matToPoints(mat: CvMat): Point[] {
     points.push({ x: data[i * 2], y: data[i * 2 + 1] });
   }
   return points;
-}
-
-/** Orders four arbitrary corner points as [top-left, top-right, bottom-right, bottom-left]. */
-export function orderCorners(points: Point[]): Quad {
-  const bySum = [...points].sort((a, b) => a.x + a.y - (b.x + b.y));
-  const topLeft = bySum[0];
-  const bottomRight = bySum[3];
-
-  const byDiff = [...points].sort((a, b) => a.y - a.x - (b.y - b.x));
-  const topRight = byDiff[0];
-  const bottomLeft = byDiff[3];
-
-  return [topLeft, topRight, bottomRight, bottomLeft];
 }
 
 function distance(a: Point, b: Point): number {

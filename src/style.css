@@ -119,15 +119,47 @@ header p {
 
 #video,
 #overlay-canvas,
+#debug-canvas,
 #upload-canvas {
   width: 100%;
   display: block;
 }
 
-#overlay-canvas {
+#overlay-canvas,
+#debug-canvas {
   position: absolute;
   top: 0;
   left: 0;
+}
+
+/* Debug feature-map layers render beneath the green outline overlay. */
+#debug-canvas {
+  pointer-events: none;
+}
+
+.debug-hint {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  color: #6b7280;
+}
+
+.debug-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.debug-layers label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: #cdd2da;
+  cursor: pointer;
+}
+
+.debug-layers input {
+  margin: 0;
 }
 
 #file-input {

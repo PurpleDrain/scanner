@@ -25,10 +25,14 @@
           <div class="stage">
             <video id="video" autoplay muted playsinline></video>
             <canvas id="overlay-canvas"></canvas>
+            <canvas id="debug-canvas"></canvas>
           </div>
           <aside class="debug-panel">
             <h3>Debug Info</h3>
             <dl id="debug-list"></dl>
+            <h3>Debug Layers</h3>
+            <p class="debug-hint">Capture to populate layers.</p>
+            <div id="debug-layers" class="debug-layers"></div>
           </aside>
         </div>
         <button id="capture-btn" type="button" disabled>Capture &amp; Flatten</button>

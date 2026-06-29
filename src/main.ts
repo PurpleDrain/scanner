@@ -1,6 +1,9 @@
 import "./style.css";
 import { loadOpenCv } from "./opencv";
-import { drawQuadOutline, findDocumentQuad, warpDocument, type Quad } from "./documentScanner";
+import { drawQuadOutline, warpDocument, type Quad } from "./documentScanner";
+import { detectDocument } from "./detection/detectDocument";
+import type { DetectionResult } from "./detection/types";
+import { DEBUG_LAYERS, renderDebugLayers, type DebugLayer } from "./detection/debug/render";
 import type { CV, Mat as CvMat } from "@techstark/opencv-js";
 
 const statusEl = document.querySelector<HTMLParagraphElement>("#status")!;
@@ -11,18 +14,21 @@ const uploadPanel = document.querySelector<HTMLElement>("#upload-panel")!;
 const resultPanel = document.querySelector<HTMLElement>("#result-panel")!;
 const video = document.querySelector<HTMLVideoElement>("#video")!;
 const overlayCanvas = document.querySelector<HTMLCanvasElement>("#overlay-canvas")!;
+const debugCanvas = document.querySelector<HTMLCanvasElement>("#debug-canvas")!;
 const captureBtn = document.querySelector<HTMLButtonElement>("#capture-btn")!;
 const fileInput = document.querySelector<HTMLInputElement>("#file-input")!;
 const uploadCanvas = document.querySelector<HTMLCanvasElement>("#upload-canvas")!;
 const resultCanvas = document.querySelector<HTMLCanvasElement>("#result-canvas")!;
 const downloadLink = document.querySelector<HTMLAnchorElement>("#download-link")!;
 const debugListEl = document.querySelector<HTMLDListElement>("#debug-list")!;
+const debugLayersEl = document.querySelector<HTMLDivElement>("#debug-layers")!;
 
 const overlayCtx = overlayCanvas.getContext("2d")!;
+const debugCtx = debugCanvas.getContext("2d")!;
 const uploadCtx = uploadCanvas.getContext("2d")!;
 
-// Detection runs on a downscaled offscreen frame for performance; the resulting
-// quad is then rescaled back up to the overlay/full-res coordinate space.
+// Live preview detection runs on a downscaled offscreen frame for performance; the resulting
+// quad is rescaled back up to the overlay/full-res coordinate space.
 const PROCESSING_WIDTH = 480;
 const processingCanvas = document.createElement("canvas");
 const processingCtx = processingCanvas.getContext("2d")!;
@@ -33,6 +39,14 @@ let detectionLoopHandle: number | null = null;
 let lastWebcamQuad: Quad | null = null;
 let currentVideoTrack: MediaStreamTrack | null = null;
 let lastFlattenedSize: { width: number; height: number } | null = null;
+
+// Detection diagnostics surfaced in the debug panel.
+let previewResult: DetectionResult | null = null;
+let captureResult: DetectionResult | null = null;
+let captureSrcWidth = 0;
+let fps = 0;
+let lastTickTime = 0;
+const activeLayers = new Set<DebugLayer>(["selected"]);
 
 type Mode = "webcam" | "upload";
 
@@ -53,10 +67,9 @@ function setMode(mode: Mode): void {
   }
 }
 
-// Requested as an "ideal" floor; maximizeTrackResolution() below pushes the
-// actual negotiated resolution up to the device's true max afterward, since
-// browsers may otherwise settle for a lower default even when a high "ideal"
-// is given.
+// Requested as an "ideal" floor; maximizeTrackResolution() below pushes the actual negotiated
+// resolution up to the device's true max afterward, since browsers may otherwise settle for a
+// lower default even when a high "ideal" is given.
 const REQUESTED_WIDTH = 4096;
 const REQUESTED_HEIGHT = 2160;
 
@@ -76,8 +89,8 @@ async function startWebcam(): Promise<void> {
     statusEl.textContent = "Could not access the webcam. Check permissions, or use Upload Image instead.";
     return;
   }
-  // The user may have switched back to Upload mode while the permission
-  // prompt / camera was still starting up — bail out without touching state.
+  // The user may have switched back to Upload mode while the permission prompt / camera was still
+  // starting up — bail out without touching state.
   if (activeMode !== "webcam") {
     stream.getTracks().forEach((track) => track.stop());
     return;
@@ -97,6 +110,9 @@ async function startWebcam(): Promise<void> {
 
   overlayCanvas.width = video.videoWidth;
   overlayCanvas.height = video.videoHeight;
+  debugCanvas.width = video.videoWidth;
+  debugCanvas.height = video.videoHeight;
+  debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
   const scale = PROCESSING_WIDTH / video.videoWidth;
   processingCanvas.width = PROCESSING_WIDTH;
   processingCanvas.height = Math.round(video.videoHeight * scale);
@@ -114,10 +130,7 @@ async function maximizeTrackResolution(track: MediaStreamTrack): Promise<void> {
   const maxHeight = capabilities?.height?.max;
   if (!maxWidth || !maxHeight) return;
   try {
-    await track.applyConstraints({
-      width: { ideal: maxWidth },
-      height: { ideal: maxHeight },
-    });
+    await track.applyConstraints({ width: { ideal: maxWidth }, height: { ideal: maxHeight } });
   } catch {
     // Device rejected the exact max — keep whatever resolution was already negotiated.
   }
@@ -132,46 +145,9 @@ function stopWebcam(): void {
   mediaStream = null;
   lastWebcamQuad = null;
   currentVideoTrack = null;
+  previewResult = null;
   captureBtn.disabled = true;
   debugListEl.replaceChildren();
-}
-
-/** Renders camera/capture diagnostics (negotiated resolution, frame rate, etc.) into the debug panel. */
-function renderDebugInfo(): void {
-  if (!currentVideoTrack) {
-    debugListEl.replaceChildren();
-    return;
-  }
-
-  const settings = currentVideoTrack.getSettings();
-  const capabilities = currentVideoTrack.getCapabilities?.() ?? {};
-  const deviceMaxResolution =
-    capabilities.width?.max && capabilities.height?.max
-      ? `${capabilities.width.max} × ${capabilities.height.max}`
-      : "unknown";
-
-  const rows: [string, string][] = [
-    ["Capture resolution", `${video.videoWidth} × ${video.videoHeight}`],
-    ["Device max resolution", deviceMaxResolution],
-    ["Frame rate", settings.frameRate ? `${settings.frameRate.toFixed(1)} fps` : "unknown"],
-    ["Facing mode", settings.facingMode ?? "unknown"],
-    ["Device label", currentVideoTrack.label || "unknown"],
-    ["Detection processing size", `${processingCanvas.width} × ${processingCanvas.height}`],
-    ["Device pixel ratio", String(window.devicePixelRatio)],
-  ];
-  if (lastFlattenedSize) {
-    rows.push(["Last flattened size", `${lastFlattenedSize.width} × ${lastFlattenedSize.height}`]);
-  }
-
-  debugListEl.replaceChildren(
-    ...rows.flatMap(([label, value]) => {
-      const dt = document.createElement("dt");
-      dt.textContent = label;
-      const dd = document.createElement("dd");
-      dd.textContent = value;
-      return [dt, dd];
-    }),
-  );
 }
 
 function runDetectionLoop(): void {
@@ -179,13 +155,18 @@ function runDetectionLoop(): void {
   const scaleY = overlayCanvas.height / processingCanvas.height;
 
   const tick = () => {
+    const now = performance.now();
+    if (lastTickTime) fps = fps * 0.8 + (1000 / Math.max(1, now - lastTickTime)) * 0.2;
+    lastTickTime = now;
+
     processingCtx.drawImage(video, 0, 0, processingCanvas.width, processingCanvas.height);
     const src = cv.imread(processingCanvas);
     try {
-      const quad = findDocumentQuad(cv, src);
+      // Fast single-scale detector for the live outline; the full pipeline runs at capture.
+      previewResult = detectDocument(cv, src, { mode: "preview" });
       overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-      if (quad) {
-        lastWebcamQuad = quad.map((p) => ({ x: p.x * scaleX, y: p.y * scaleY })) as Quad;
+      if (previewResult.quad) {
+        lastWebcamQuad = previewResult.quad.map((p) => ({ x: p.x * scaleX, y: p.y * scaleY })) as Quad;
         drawQuadOutline(overlayCtx, lastWebcamQuad);
         statusEl.textContent = "Document detected — ready to capture.";
       } else {
@@ -195,6 +176,7 @@ function runDetectionLoop(): void {
     } finally {
       src.delete();
     }
+    renderDebugInfo();
     detectionLoopHandle = requestAnimationFrame(tick);
   };
   detectionLoopHandle = requestAnimationFrame(tick);
@@ -208,16 +190,37 @@ function captureAndFlatten(): void {
 
   const src = cv.imread(fullCanvas);
   try {
-    const quad = findDocumentQuad(cv, src) ?? lastWebcamQuad;
+    // Full multi-scale detection with debug buffers for the captured still.
+    captureResult = detectDocument(cv, src, { mode: "full", debug: true });
+    captureSrcWidth = fullCanvas.width;
+    const quad = captureResult.quad ?? lastWebcamQuad;
     if (!quad) {
       statusEl.textContent = "No document edges found — try repositioning and capture again.";
       return;
     }
+    renderCaptureDebug();
     showWarpedResult(src, quad);
     renderDebugInfo();
   } finally {
     src.delete();
   }
+}
+
+/** Re-renders the selected debug layers from the most recent capture onto the debug canvas. */
+function renderCaptureDebug(): void {
+  if (!captureResult?.debug || debugCanvas.width === 0) {
+    debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
+    return;
+  }
+  renderDebugLayers(
+    debugCtx,
+    debugCanvas.width,
+    debugCanvas.height,
+    captureSrcWidth,
+    captureResult.debug,
+    captureResult.quad,
+    activeLayers,
+  );
 }
 
 function showWarpedResult(src: CvMat, quad: Quad): void {
@@ -239,7 +242,6 @@ async function handleFileSelected(): Promise<void> {
   if (!file) return;
 
   const image = await loadImageFile(file);
-
   const maxDisplayWidth = 720;
   const scale = Math.min(1, maxDisplayWidth / image.width);
   uploadCanvas.width = Math.round(image.width * scale);
@@ -248,14 +250,16 @@ async function handleFileSelected(): Promise<void> {
 
   const src = cv.imread(uploadCanvas);
   try {
-    const quad = findDocumentQuad(cv, src);
+    captureResult = detectDocument(cv, src, { mode: "full", debug: true });
+    const quad = captureResult.quad;
     if (!quad) {
       statusEl.textContent = "No document edges found in this image.";
       resultPanel.classList.add("hidden");
       return;
     }
     drawQuadOutline(uploadCtx, quad);
-    statusEl.textContent = "Document detected.";
+    const conf = captureResult.confidence ? ` (confidence ${captureResult.confidence.value.toFixed(2)})` : "";
+    statusEl.textContent = `Document detected${conf}.`;
     showWarpedResult(src, quad);
   } finally {
     src.delete();
@@ -271,6 +275,91 @@ function loadImageFile(file: File): Promise<HTMLImageElement> {
   });
 }
 
+/** Builds the debug-panel rows from camera settings plus live/capture detection diagnostics. */
+function renderDebugInfo(): void {
+  if (!currentVideoTrack) {
+    debugListEl.replaceChildren();
+    return;
+  }
+
+  const settings = currentVideoTrack.getSettings();
+  const capabilities = currentVideoTrack.getCapabilities?.() ?? {};
+  const deviceMaxResolution =
+    capabilities.width?.max && capabilities.height?.max
+      ? `${capabilities.width.max} × ${capabilities.height.max}`
+      : "unknown";
+
+  const rows: [string, string][] = [
+    ["Capture resolution", `${video.videoWidth} × ${video.videoHeight}`],
+    ["Device max resolution", deviceMaxResolution],
+    ["Frame rate", settings.frameRate ? `${settings.frameRate.toFixed(1)} fps` : "unknown"],
+    ["Facing mode", settings.facingMode ?? "unknown"],
+    ["Detection processing size", `${processingCanvas.width} × ${processingCanvas.height}`],
+    ["Preview FPS", fps ? fps.toFixed(0) : "—"],
+  ];
+
+  if (previewResult) {
+    rows.push(["Preview detect time", `${sumTimings(previewResult)} ms`]);
+    rows.push(["Preview confidence", previewResult.confidence ? previewResult.confidence.value.toFixed(2) : "—"]);
+  }
+
+  if (captureResult) {
+    rows.push(["Capture detect time", `${sumTimings(captureResult)} ms`]);
+    rows.push(["Capture confidence", captureResult.confidence ? captureResult.confidence.value.toFixed(2) : "—"]);
+    const c = captureResult.components;
+    if (c) {
+      rows.push(["  edge / textDens", `${c.edge.toFixed(2)} / ${c.textDensity.toFixed(2)}`]);
+      rows.push(["  area / aspect", `${c.area.toFixed(2)} / ${c.aspectRatio.toFixed(2)}`]);
+      rows.push(["  interior / total", `${c.interiorConsistency.toFixed(2)} / ${c.total.toFixed(2)}`]);
+    }
+    rows.push(["Capture stages (ms)", stageString(captureResult)]);
+  }
+
+  if (lastFlattenedSize) {
+    rows.push(["Last flattened size", `${lastFlattenedSize.width} × ${lastFlattenedSize.height}`]);
+  }
+
+  debugListEl.replaceChildren(
+    ...rows.flatMap(([label, value]) => {
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.textContent = value;
+      return [dt, dd];
+    }),
+  );
+}
+
+function sumTimings(result: DetectionResult): number {
+  return Math.round(Object.values(result.timings).reduce((a, b) => a + b, 0));
+}
+
+function stageString(result: DetectionResult): string {
+  return Object.entries(result.timings)
+    .map(([k, v]) => `${k.slice(0, 4)} ${Math.round(v)}`)
+    .join(", ");
+}
+
+function buildLayerToggles(): void {
+  debugLayersEl.replaceChildren(
+    ...DEBUG_LAYERS.map(({ id, label }) => {
+      const wrapper = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = activeLayers.has(id);
+      input.addEventListener("change", () => {
+        if (input.checked) activeLayers.add(id);
+        else activeLayers.delete(id);
+        renderCaptureDebug();
+      });
+      const span = document.createElement("span");
+      span.textContent = label;
+      wrapper.append(input, span);
+      return wrapper;
+    }),
+  );
+}
+
 modeWebcamBtn.addEventListener("click", () => setMode("webcam"));
 modeUploadBtn.addEventListener("click", () => setMode("upload"));
 captureBtn.addEventListener("click", captureAndFlatten);
@@ -279,6 +368,7 @@ fileInput.addEventListener("change", () => void handleFileSelected());
 async function init(): Promise<void> {
   cv = await loadOpenCv();
   statusEl.textContent = "OpenCV.js ready.";
+  buildLayerToggles();
   setMode("webcam");
 }
 
