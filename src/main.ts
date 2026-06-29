@@ -16,6 +16,7 @@ const fileInput = document.querySelector<HTMLInputElement>("#file-input")!;
 const uploadCanvas = document.querySelector<HTMLCanvasElement>("#upload-canvas")!;
 const resultCanvas = document.querySelector<HTMLCanvasElement>("#result-canvas")!;
 const downloadLink = document.querySelector<HTMLAnchorElement>("#download-link")!;
+const debugListEl = document.querySelector<HTMLDListElement>("#debug-list")!;
 
 const overlayCtx = overlayCanvas.getContext("2d")!;
 const uploadCtx = uploadCanvas.getContext("2d")!;
@@ -30,6 +31,8 @@ let cv: CV;
 let mediaStream: MediaStream | null = null;
 let detectionLoopHandle: number | null = null;
 let lastWebcamQuad: Quad | null = null;
+let currentVideoTrack: MediaStreamTrack | null = null;
+let lastFlattenedSize: { width: number; height: number } | null = null;
 
 type Mode = "webcam" | "upload";
 
@@ -50,12 +53,23 @@ function setMode(mode: Mode): void {
   }
 }
 
+// Requested as an "ideal" floor; maximizeTrackResolution() below pushes the
+// actual negotiated resolution up to the device's true max afterward, since
+// browsers may otherwise settle for a lower default even when a high "ideal"
+// is given.
+const REQUESTED_WIDTH = 4096;
+const REQUESTED_HEIGHT = 2160;
+
 async function startWebcam(): Promise<void> {
   if (mediaStream) return;
   let stream: MediaStream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" },
+      video: {
+        facingMode: "environment",
+        width: { ideal: REQUESTED_WIDTH },
+        height: { ideal: REQUESTED_HEIGHT },
+      },
       audio: false,
     });
   } catch {
@@ -69,6 +83,10 @@ async function startWebcam(): Promise<void> {
     return;
   }
   mediaStream = stream;
+  const [track] = stream.getVideoTracks();
+  currentVideoTrack = track;
+  await maximizeTrackResolution(track);
+
   video.srcObject = mediaStream;
   await video.play();
 
@@ -85,7 +103,24 @@ async function startWebcam(): Promise<void> {
 
   captureBtn.disabled = false;
   statusEl.textContent = "Looking for a document… hold it flat within the frame.";
+  renderDebugInfo();
   runDetectionLoop();
+}
+
+/** Re-requests the track's resolution at the device's reported maximum, since "ideal" alone isn't always honored. */
+async function maximizeTrackResolution(track: MediaStreamTrack): Promise<void> {
+  const capabilities = track.getCapabilities?.();
+  const maxWidth = capabilities?.width?.max;
+  const maxHeight = capabilities?.height?.max;
+  if (!maxWidth || !maxHeight) return;
+  try {
+    await track.applyConstraints({
+      width: { ideal: maxWidth },
+      height: { ideal: maxHeight },
+    });
+  } catch {
+    // Device rejected the exact max — keep whatever resolution was already negotiated.
+  }
 }
 
 function stopWebcam(): void {
@@ -96,7 +131,47 @@ function stopWebcam(): void {
   mediaStream?.getTracks().forEach((track) => track.stop());
   mediaStream = null;
   lastWebcamQuad = null;
+  currentVideoTrack = null;
   captureBtn.disabled = true;
+  debugListEl.replaceChildren();
+}
+
+/** Renders camera/capture diagnostics (negotiated resolution, frame rate, etc.) into the debug panel. */
+function renderDebugInfo(): void {
+  if (!currentVideoTrack) {
+    debugListEl.replaceChildren();
+    return;
+  }
+
+  const settings = currentVideoTrack.getSettings();
+  const capabilities = currentVideoTrack.getCapabilities?.() ?? {};
+  const deviceMaxResolution =
+    capabilities.width?.max && capabilities.height?.max
+      ? `${capabilities.width.max} × ${capabilities.height.max}`
+      : "unknown";
+
+  const rows: [string, string][] = [
+    ["Capture resolution", `${video.videoWidth} × ${video.videoHeight}`],
+    ["Device max resolution", deviceMaxResolution],
+    ["Frame rate", settings.frameRate ? `${settings.frameRate.toFixed(1)} fps` : "unknown"],
+    ["Facing mode", settings.facingMode ?? "unknown"],
+    ["Device label", currentVideoTrack.label || "unknown"],
+    ["Detection processing size", `${processingCanvas.width} × ${processingCanvas.height}`],
+    ["Device pixel ratio", String(window.devicePixelRatio)],
+  ];
+  if (lastFlattenedSize) {
+    rows.push(["Last flattened size", `${lastFlattenedSize.width} × ${lastFlattenedSize.height}`]);
+  }
+
+  debugListEl.replaceChildren(
+    ...rows.flatMap(([label, value]) => {
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.textContent = value;
+      return [dt, dd];
+    }),
+  );
 }
 
 function runDetectionLoop(): void {
@@ -139,6 +214,7 @@ function captureAndFlatten(): void {
       return;
     }
     showWarpedResult(src, quad);
+    renderDebugInfo();
   } finally {
     src.delete();
   }
@@ -152,6 +228,7 @@ function showWarpedResult(src: CvMat, quad: Quad): void {
     cv.imshow(resultCanvas, warped);
     resultPanel.classList.remove("hidden");
     downloadLink.href = resultCanvas.toDataURL("image/png");
+    lastFlattenedSize = { width: warped.cols, height: warped.rows };
   } finally {
     warped.delete();
   }

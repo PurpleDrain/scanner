@@ -21,9 +21,15 @@
       <p id="status">Loading OpenCV.js&hellip;</p>
 
       <section id="webcam-panel" class="panel">
-        <div class="stage">
-          <video id="video" autoplay muted playsinline></video>
-          <canvas id="overlay-canvas"></canvas>
+        <div class="webcam-layout">
+          <div class="stage">
+            <video id="video" autoplay muted playsinline></video>
+            <canvas id="overlay-canvas"></canvas>
+          </div>
+          <aside class="debug-panel">
+            <h3>Debug Info</h3>
+            <dl id="debug-list"></dl>
+          </aside>
         </div>
         <button id="capture-btn" type="button" disabled>Capture &amp; Flatten</button>
       </section>
