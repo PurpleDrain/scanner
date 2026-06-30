@@ -4,6 +4,7 @@ import { drawQuadOutline, warpDocument, type Quad } from "./documentScanner";
 import { detectDocument } from "./detection/detectDocument";
 import type { DetectionResult } from "./detection/types";
 import { DEBUG_LAYERS, renderDebugLayers, type DebugLayer } from "./detection/debug/render";
+import { DocumentTracker, type TrackingResult } from "./detection/tracker";
 import type { CV, Mat as CvMat } from "@techstark/opencv-js";
 
 const statusEl = document.querySelector<HTMLParagraphElement>("#status")!;
@@ -30,8 +31,7 @@ const uploadCtx = uploadCanvas.getContext("2d")!;
 // Live preview detection runs on a downscaled offscreen frame for performance; the resulting
 // quad is rescaled back up to the overlay/full-res coordinate space.
 const PROCESSING_WIDTH = 480;
-// The full detection pipeline (all checks) runs live, but only every Nth animation frame to keep
-// the view responsive; the last outline stays drawn on the intervening frames.
+// The full detection pipeline runs every Nth animation frame; tracking interpolates between runs.
 const DETECTION_FRAME_INTERVAL = 10;
 const processingCanvas = document.createElement("canvas");
 const processingCtx = processingCanvas.getContext("2d")!;
@@ -51,6 +51,13 @@ let fps = 0;
 let lastTickTime = 0;
 let frameCounter = 0;
 const activeLayers = new Set<DebugLayer>(["selected"]);
+
+// Temporal tracker and its current output.
+let tracker: DocumentTracker | null = null;
+let trackingResult: TrackingResult | null = null;
+
+// Live overlay debug toggles (separate from capture debug layers).
+const liveOverlayLayers = new Set<"rawDetected" | "velocity">();
 
 type Mode = "webcam" | "upload";
 
@@ -121,6 +128,8 @@ async function startWebcam(): Promise<void> {
   processingCanvas.width = PROCESSING_WIDTH;
   processingCanvas.height = Math.round(video.videoHeight * scale);
 
+  tracker = new DocumentTracker();
+
   captureBtn.disabled = false;
   statusEl.textContent = "Looking for a document… hold it flat within the frame.";
   renderDebugInfo();
@@ -150,6 +159,8 @@ function stopWebcam(): void {
   lastWebcamQuad = null;
   currentVideoTrack = null;
   liveResult = null;
+  trackingResult = null;
+  tracker = null;
   captureBtn.disabled = true;
   debugListEl.replaceChildren();
 }
@@ -164,31 +175,131 @@ function runDetectionLoop(): void {
     if (lastTickTime) fps = fps * 0.8 + (1000 / Math.max(1, now - lastTickTime)) * 0.2;
     lastTickTime = now;
 
-    // Run the full pipeline (all checks) on a throttled cadence; between runs the loop just keeps
-    // the last outline on screen and refreshes the FPS reading.
     if (frameCounter % DETECTION_FRAME_INTERVAL === 0) {
+      // Run the full detection pipeline and update the tracker with the fresh result.
       processingCtx.drawImage(video, 0, 0, processingCanvas.width, processingCanvas.height);
       const src = cv.imread(processingCanvas);
       try {
         liveResult = detectDocument(cv, src, { mode: "full" });
-        overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-        if (liveResult.quad) {
-          lastWebcamQuad = liveResult.quad.map((p) => ({ x: p.x * scaleX, y: p.y * scaleY })) as Quad;
-          drawQuadOutline(overlayCtx, lastWebcamQuad);
-          statusEl.textContent = "Document detected — ready to capture.";
-        } else {
-          lastWebcamQuad = null;
-          statusEl.textContent = "Looking for a document… hold it flat within the frame.";
-        }
+        trackingResult = tracker!.update(liveResult);
       } finally {
         src.delete();
       }
       renderDebugInfo();
+    } else {
+      // No new detection; advance the tracker's internal state (confidence decay, etc.)
+      trackingResult = tracker!.tick();
     }
+
+    // Redraw overlay every frame so the tracker's smoothed quad is always current.
+    renderLiveOverlay(scaleX, scaleY);
+
     frameCounter++;
     detectionLoopHandle = requestAnimationFrame(tick);
   };
   detectionLoopHandle = requestAnimationFrame(tick);
+}
+
+/** Draws the tracker output onto the overlay canvas. */
+function renderLiveOverlay(scaleX: number, scaleY: number): void {
+  overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+  if (!trackingResult) return;
+
+  const tr = trackingResult;
+
+  // Raw detected quad (yellow, thin) — drawn first so the smoothed quad renders on top.
+  if (liveOverlayLayers.has("rawDetected") && tr.rawDetectedQuad) {
+    const rawScaled = tr.rawDetectedQuad.map((p) => ({ x: p.x * scaleX, y: p.y * scaleY })) as Quad;
+    drawQuadOutline(overlayCtx, rawScaled, { stroke: "rgba(255,200,0,0.65)", lineWidth: 1.5 });
+  }
+
+  // Smoothed/tracked quad — colour reflects the tracker state.
+  if (tr.quad) {
+    const scaledQuad = tr.quad.map((p) => ({ x: p.x * scaleX, y: p.y * scaleY })) as Quad;
+    lastWebcamQuad = scaledQuad;
+
+    const stateColor =
+      tr.state === "tracking"
+        ? tr.stabilityScore > 0.7
+          ? "#22c55e" // bright green — highly stable
+          : "#4ade80" // softer green — tracking but not yet fully stable
+        : tr.state === "detected"
+          ? "#facc15" // yellow — first seen, confirming
+          : "rgba(148,163,184,0.7)"; // gray — lost, showing last known position
+
+    drawQuadOutline(overlayCtx, scaledQuad, { stroke: stateColor, lineWidth: tr.state === "tracking" ? 3 : 2 });
+
+    // Corner velocity arrows (drawn over the quad).
+    if (liveOverlayLayers.has("velocity") && tr.cornerDeltas) {
+      drawVelocityArrows(overlayCtx, scaledQuad, tr.cornerDeltas, scaleX, scaleY);
+    }
+  }
+
+  // Update status bar.
+  updateStatusText(tr);
+}
+
+function drawVelocityArrows(
+  ctx: CanvasRenderingContext2D,
+  scaledQuad: Quad,
+  deltas: TrackingResult["cornerDeltas"],
+  scaleX: number,
+  scaleY: number,
+): void {
+  if (!deltas) return;
+  const SCALE = 8; // amplify tiny movements so they're visible
+
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,100,100,0.85)";
+  ctx.fillStyle = "rgba(255,100,100,0.85)";
+  ctx.lineWidth = 1.5;
+
+  for (let i = 0; i < 4; i++) {
+    const cx = scaledQuad[i].x;
+    const cy = scaledQuad[i].y;
+    const dx = deltas[i].x * scaleX * SCALE;
+    const dy = deltas[i].y * scaleY * SCALE;
+    const len = Math.hypot(dx, dy);
+    if (len < 1) continue;
+
+    // Arrow shaft
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + dx, cy + dy);
+    ctx.stroke();
+
+    // Arrowhead
+    const angle = Math.atan2(dy, dx);
+    const headLen = Math.min(8, len * 0.4);
+    ctx.beginPath();
+    ctx.moveTo(cx + dx, cy + dy);
+    ctx.lineTo(cx + dx - headLen * Math.cos(angle - 0.4), cy + dy - headLen * Math.sin(angle - 0.4));
+    ctx.lineTo(cx + dx - headLen * Math.cos(angle + 0.4), cy + dy - headLen * Math.sin(angle + 0.4));
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function updateStatusText(tr: TrackingResult): void {
+  switch (tr.state) {
+    case "searching":
+      statusEl.textContent = "Looking for a document… hold it flat within the frame.";
+      break;
+    case "detected":
+      statusEl.textContent = "Document detected — aligning…";
+      break;
+    case "tracking":
+      statusEl.textContent =
+        tr.stabilityScore > 0.75
+          ? "Document locked — ready to capture."
+          : "Document tracked — stabilising…";
+      break;
+    case "lost":
+      statusEl.textContent = "Document lost — searching…";
+      break;
+  }
 }
 
 function captureAndFlatten(): void {
@@ -309,6 +420,17 @@ function renderDebugInfo(): void {
   ];
 
   appendResultRows(rows, "Live", liveResult);
+
+  // Tracker diagnostics
+  if (trackingResult) {
+    const tr = trackingResult;
+    rows.push(["Tracker state", tr.state]);
+    rows.push(["Detection confidence", tr.detectionConfidence ? tr.detectionConfidence.toFixed(2) : "—"]);
+    rows.push(["Tracking confidence", tr.trackingConfidence.toFixed(2)]);
+    rows.push(["Stability score", tr.stabilityScore.toFixed(2)]);
+    rows.push(["Corner velocity", tr.cornerVelocity ? `${tr.cornerVelocity.toFixed(1)} px/det` : "0"]);
+  }
+
   appendResultRows(rows, "Capture", captureResult);
 
   if (lastFlattenedSize) {
@@ -350,6 +472,7 @@ function stageString(result: DetectionResult): string {
     .join(", ");
 }
 
+/** Builds the capture-mode debug layer toggles. */
 function buildLayerToggles(): void {
   debugLayersEl.replaceChildren(
     ...DEBUG_LAYERS.map(({ id, label }) => {
@@ -367,7 +490,30 @@ function buildLayerToggles(): void {
       wrapper.append(input, span);
       return wrapper;
     }),
+    ...buildLiveLayerToggles(),
   );
+}
+
+/** Returns toggle elements for the live overlay layers (raw detected quad, velocity arrows). */
+function buildLiveLayerToggles(): HTMLLabelElement[] {
+  const liveLayerDefs: { id: "rawDetected" | "velocity"; label: string }[] = [
+    { id: "rawDetected", label: "Raw detected quad (live)" },
+    { id: "velocity", label: "Corner velocity vectors (live)" },
+  ];
+  return liveLayerDefs.map(({ id, label }) => {
+    const wrapper = document.createElement("label");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = liveOverlayLayers.has(id);
+    input.addEventListener("change", () => {
+      if (input.checked) liveOverlayLayers.add(id);
+      else liveOverlayLayers.delete(id);
+    });
+    const span = document.createElement("span");
+    span.textContent = label;
+    wrapper.append(input, span);
+    return wrapper;
+  });
 }
 
 modeWebcamBtn.addEventListener("click", () => setMode("webcam"));
