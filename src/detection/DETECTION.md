@@ -29,7 +29,7 @@ Four stages with stable interfaces so a future ML model can replace any one of t
 | Candidate generation | `candidates/hough.ts`, `candidates/quads.ts` | candidate lines → valid quadrilaterals |
 | Candidate scoring | `scoring/components.ts`, `scoring/confidence.ts`, `scoring/index.ts` | scored candidates + confidence |
 | Orchestration | `detectDocument.ts`, `multiScale.ts`, `profiler.ts` | `DetectionResult` |
-| Perspective correction | `documentScanner.ts` (`warpDocument`) | flattened image |
+| Perspective correction | `warp/webglWarp.ts` (`warpRgba`) | flattened image |
 
 Shared types live in `types.ts`, geometry helpers in `geometry.ts`, tunables in `config.ts`,
 debug rendering in `debug/render.ts`.
@@ -50,8 +50,8 @@ debug rendering in `debug/render.ts`.
 
 ## Scoring components
 
-`score = wE·edge + wT·textDensity + wA·area + wR·aspectRatio + wC·interiorConsistency`
-(weights in `config.ts`, default `0.35 / 0.15 / 0.25 / 0.10 / 0.15`).
+`score = wE·edge + wT·textDensity + wA·area + wR·aspectRatio + wC·interiorConsistency + wV·envelopeSupport + wB·borderMargin`
+(weights in `config.ts`, default `0.17 / 0.08 / 0.10 / 0.05 / 0.08 / 0.20 / 0.32` — border margin dominates).
 
 - **edge** — mean gradient magnitude sampled along the four edges, normalised. A real border runs
   along strong gradients; a quad cutting across flat regions scores low.
@@ -61,8 +61,20 @@ debug rendering in `debug/render.ts`.
 - **area** — fraction of the frame covered; documents are large.
 - **aspectRatio** — plausibility of the long/short side ratio (paper-like, perspective-tolerant).
 - **interiorConsistency** — interior luminance uniformity in Lab; pages are smooth between glyphs.
+- **borderMargin** — each edge should be a physical page border, not an interior text line (top
+  snaps) or a quad that overshoots the paper onto the desk (bottom). Penalises strong parallel
+  gradients just inside/outside the edge and dense text immediately below the top border.
+- **envelopeSupport** — mean shadow + color response along the quad border; matches the
+  document-shaped blob visible in the color-edge and shadow debug layers.
 
-**Confidence** (`scoring/confidence.ts`, 0..1) combines edge strength, quad validity
+**Candidate sources:** Hough line intersections (interior lines can dominate) plus an
+**envelope contour** extracted from the combined color/shadow mask (`candidates/envelope.ts`).
+`selectWinner()` re-ranks near-top candidates using a **border-fit** score (border margin +
+edge strength, with a penalty for oversized desk-inclusive quads) rather than blindly preferring
+the largest envelope-backed rectangle. After selection, `refineQuadToEdges()` nudges each edge
+toward the strongest parallel gradient to shrink overshoot onto the desk.
+
+**Confidence** (`scoring/confidence.ts`, 0..1) combines edge strength (including envelope support), quad validity
 (rectangularity), score gap to the runner-up, text density, and aspect-ratio plausibility. It is
 the natural hook for prompting manual corner adjustment when low.
 
@@ -75,22 +87,59 @@ confidence is comparable across scales.
 
 ## Modes & performance
 
-- **`preview`** (live frames): single low-resolution pass, color gradient + Hough + light scoring;
-  skips text-density/shadow/multi-scale.
-- **`full`** (capture/upload): multi-scale, full feature set, interior scoring, confidence, and —
-  when `debug: true` — debug buffers.
+Accuracy is prioritised over speed. Defaults process up to **2560 px** (live worker **2048 px**,
+capture/upload worker **4096 px** native longest side) with **six** multi-scale passes, dense Hough
+voting, and multi-pass edge + corner refinement on the finest feature maps.
 
-Measured in this environment (Node + OpenCV.js, 480×640 input — the live processing size):
+- **`preview`** — multi-scale live search with shadow envelope + text-density scoring.
+- **`full`** — full multi-scale search; when `debug: true`, debug buffers are emitted.
 
-| Mode | Median latency | Throughput |
-|------|----------------|------------|
-| preview | ~17 ms | ~58 fps |
-| full (multi-scale) | ~45 ms | one-shot at capture |
+### Web worker (live + capture)
 
-Per-stage (full, real photo): features ~79 ms, hough ~32 ms, candidates ~3 ms, scoring ~8 ms —
-feature extraction dominates. These are desktop numbers; on-device mobile FPS must be verified on a
-physical phone, but the preview budget leaves comfortable headroom for the 30 fps target. The
-live/full split, Mat reuse, and typed-array fields keep allocations down.
+Heavy OpenCV work runs in a dedicated module worker (`detection/worker/detectionWorker.ts`).
+The main thread keeps the camera preview, overlay, and `DocumentTracker` smooth; frames are
+sent as transferable RGBA buffers (`matFromRgba` builds the Mat inside the worker).
+
+Live detection uses **`preview` mode** with `LIVE_WORKER_CONFIG`: one scale at 640 px longest
+side, envelope + Hough (no surface sweep, no finest-scale re-pass). Capture and upload use
+**`full` multi-scale** with `CAPTURE_WORKER_CONFIG` (up to 2560 px, four scales, surface
+candidates, finest-scale edge snap) and `debug: true`. If a new frame arrives while the worker
+is busy, only the latest frame is queued.
+
+OpenCV loads **only in the CV worker** when ML is unavailable. Perspective flattening uses **WebGL** on the main thread (`warp/webglWarp.ts`) — no OpenCV needed for export when ML handles detection.
+
+## Temporal tracking (live webcam)
+
+`DocumentTracker` (`tracker.ts`) sits between the detection worker and the UI overlay. The live
+loop posts frames to the worker every N animation frames; when a result arrives it calls
+`tracker.update()`. On skipped frames it calls `tracker.tick()` for confidence decay only.
+
+Confirmation (`detected` → `tracking`) counts **consecutive good detection cycles** in `update()`,
+not animation frames between them — so throttling does not block the state machine. Capture is
+enabled when `isCaptureReady()` is true (`tracking` + stability ≥ 0.75).
+
+## Parallel ML detection (DocAligner LCNet100)
+
+Two web workers:
+
+1. **CV worker** — OpenCV color+Hough pipeline (`detectionWorker.ts`).
+2. **ML worker** — DocAligner LCNet100 corner-heatmap model via `onnxruntime-web` (`mlDetectionWorker.ts`).
+
+| Path | CV | ML |
+|------|----|----|
+| **Live preview** | skipped | ML-only fast path |
+| **Upload / capture** | same as live fallback | same preview path |
+
+All detection paths downscale to **480 px** max dimension (quad scaled back to source space), run **ML-only** when the model is loaded, and use the CV live worker profile as fallback. Upload and webcam capture use `detectPreview()` — identical to the live overlay path.
+
+Fusion (when both paths contribute, e.g. CV fallback shell + ML):
+
+- **ML wins** whenever it returns a quad with confidence ≥ 0.2.
+- **CV is the fallback** when ML is unavailable, finds nothing, or is below threshold.
+
+Model: `public/models/lcnet100_h_e_bifpn_256_fp32.onnx` (Apache 2.0, [DocsaidLab DocAligner](https://github.com/DocsaidLab/DocAligner), re-hosted via [pagescan-weights](https://huggingface.co/7rplus/pagescan-weights)). ONNX Runtime WASM binaries are bundled via Vite `?url` imports from `onnxruntime-web`.
+
+The debug panel shows **ML detector** readiness, which path won fusion (`cv` / `ml`), and separate CV/ML quads in overlays.
 
 ## Debug visualization
 

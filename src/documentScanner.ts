@@ -84,15 +84,31 @@ function distance(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+export interface WarpOptions {
+  /** Upscale the flattened output so its width is at least this many pixels (0 = native only). */
+  minOutputWidth?: number;
+  /** OpenCV interpolation flag (defaults to INTER_LINEAR). */
+  interpolation?: number;
+}
+
 /**
  * Warps the quadrilateral region of `src` into an upright rectangular Mat,
  * sized to the quad's measured width/height (perspective correction).
  */
-export function warpDocument(cv: CV, src: CvMat, quad: Quad): CvMat {
+export function warpDocument(cv: CV, src: CvMat, quad: Quad, options: WarpOptions = {}): CvMat {
   const [topLeft, topRight, bottomRight, bottomLeft] = quad;
 
-  const width = Math.round(Math.max(distance(topLeft, topRight), distance(bottomLeft, bottomRight)));
-  const height = Math.round(Math.max(distance(topLeft, bottomLeft), distance(topRight, bottomRight)));
+  let width = Math.round(Math.max(distance(topLeft, topRight), distance(bottomLeft, bottomRight)));
+  let height = Math.round(Math.max(distance(topLeft, bottomLeft), distance(topRight, bottomRight)));
+
+  const minOutputWidth = options.minOutputWidth ?? 0;
+  if (minOutputWidth > 0 && width > 0 && width < minOutputWidth) {
+    const scale = minOutputWidth / width;
+    width = Math.round(width * scale);
+    height = Math.round(height * scale);
+  }
+
+  const interpolation = options.interpolation ?? cv.INTER_LINEAR;
 
   const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
     topLeft.x, topLeft.y,
@@ -111,7 +127,7 @@ export function warpDocument(cv: CV, src: CvMat, quad: Quad): CvMat {
   const dst = new cv.Mat();
 
   try {
-    cv.warpPerspective(src, dst, transform, new cv.Size(width, height), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+    cv.warpPerspective(src, dst, transform, new cv.Size(width, height), interpolation, cv.BORDER_CONSTANT, new cv.Scalar());
     return dst;
   } finally {
     srcTri.delete();

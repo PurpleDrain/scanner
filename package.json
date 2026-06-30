@@ -17,6 +17,7 @@
     "vitest": "^4.1.9"
   },
   "dependencies": {
-    "@techstark/opencv-js": "^5.0.0-release.1"
+    "@techstark/opencv-js": "^5.0.0-release.1",
+    "onnxruntime-web": "^1.27.0"
   }
 }

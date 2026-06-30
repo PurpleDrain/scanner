@@ -1,5 +1,11 @@
 import type { DetectionConfig } from "../config";
-import { angularDistance, isConvex, lineIntersection, maxCornerAngleDeviation, polygonArea } from "../geometry";
+import {
+  clusterLinesIntoGroups,
+  isConvex,
+  lineIntersection,
+  maxCornerAngleDeviation,
+  polygonArea,
+} from "../geometry";
 import type { Candidate, FeatureMaps, Line, Quad } from "../types";
 
 /**
@@ -17,14 +23,9 @@ export function enumerateQuads(maps: FeatureMaps, lines: Line[], config: Detecti
   const { width, height } = maps;
   const imageArea = width * height;
 
-  const reference = lines[0].theta;
-  const groupA: Line[] = [];
-  const groupB: Line[] = [];
-  for (const line of lines) {
-    if (angularDistance(line.theta, reference) < Math.PI / 4) groupA.push(line);
-    else groupB.push(line);
-  }
-  if (groupA.length < 2 || groupB.length < 2) return [];
+  const groups = clusterLinesIntoGroups(lines);
+  if (!groups) return [];
+  const [groupA, groupB] = groups;
 
   const a = groupA.slice(0, config.maxLinesPerGroup);
   const b = groupB.slice(0, config.maxLinesPerGroup);

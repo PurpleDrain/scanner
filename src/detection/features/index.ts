@@ -11,9 +11,8 @@ export { computeTextDensity } from "./textDensity";
 
 /**
  * Feature-extraction stage: turns a source RGBA image into the {@link FeatureMaps} consumed by
- * candidate generation and scoring. In "preview" mode only the (cheap) color gradient is built;
- * in "full" mode the text-density and shadow features are added and a gentle shadow contribution
- * is folded into the gradient magnitude so faint shadow edges can vote in the Hough stage.
+ * candidate generation and scoring. Shadow + text-density are always built (needed for envelope
+ * detection in live preview). Multi-scale search and optional shadow→Hough blending are full-only.
  */
 export function extractFeatures(
   cv: CV,
@@ -35,23 +34,20 @@ export function extractFeatures(
     magnitudeL: grad.magnitudeL,
     magnitudeA: grad.magnitudeA,
     magnitudeB: grad.magnitudeB,
+    labL: grad.labL,
+    labA: grad.labA,
+    labB: grad.labB,
   };
 
-  if (!full) return maps;
-
-  maps.labL = grad.labL;
-  maps.labA = grad.labA;
-  maps.labB = grad.labB;
   maps.textDensity = computeTextDensity(cv, grad.labL, width, height, config);
 
   const shadow = computeShadowEdges(cv, grad.labL, width, height, config);
   maps.shadow = shadow;
-
-  // Fold a normalised, weighted shadow contribution into the gradient magnitude so soft shadow
-  // borders strengthen real page edges in the accumulator without overwhelming the color signal.
   let shadowMax = 0;
   for (let i = 0; i < shadow.length; i++) if (shadow[i] > shadowMax) shadowMax = shadow[i];
-  if (shadowMax > 0 && config.shadowWeight > 0) {
+  maps.shadowMax = shadowMax;
+
+  if (full && shadowMax > 0 && config.shadowWeight > 0) {
     const scale = (config.shadowWeight * grad.maxMagnitude) / shadowMax;
     let newMax = 0;
     for (let i = 0; i < maps.magnitude.length; i++) {

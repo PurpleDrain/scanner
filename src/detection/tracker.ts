@@ -45,6 +45,15 @@ export interface TrackerOptions {
   maxAreaRatioChange?: number;
   /** Number of recent corner-displacement samples used to compute the rolling velocity. */
   velocityWindowSize?: number;
+  /**
+   * Animation frames expected between detection `update()` calls (match the live loop's
+   * DETECTION_FRAME_INTERVAL). Used for confidence decay; must not drive confirmation timeouts.
+   */
+  ticksBetweenDetections?: number;
+  /** Consecutive failed detection cycles in Detected before falling back to Searching. */
+  maxBadDetectionCycles?: number;
+  /** Stability score (0..1) at or above which `isCaptureReady()` returns true. */
+  captureReadyStability?: number;
 }
 
 const DEFAULTS: Required<TrackerOptions> = {
@@ -58,6 +67,9 @@ const DEFAULTS: Required<TrackerOptions> = {
   maxCornerJump: 100,
   maxAreaRatioChange: 2.5,
   velocityWindowSize: 6,
+  ticksBetweenDetections: 10,
+  maxBadDetectionCycles: 2,
+  captureReadyStability: 0.75,
 };
 
 /**
@@ -83,8 +95,10 @@ export class DocumentTracker {
   private _cornerDeltas: [Point, Point, Point, Point] | null = null;
 
   private consecutiveGoodCycles: number = 0;
-  private cyclesSinceDetection: number = 0;
-  private cyclesInLost: number = 0;
+  private consecutiveBadCycles: number = 0;
+  private ticksSinceDetection: number = 0;
+  private ticksInLost: number = 0;
+  private lostDetectionFailures: number = 0;
 
   private prevSmoothedQuad: Quad | null = null;
   private velocityHistory: number[] = [];
@@ -97,11 +111,16 @@ export class DocumentTracker {
     return this._state;
   }
 
+  /** True when the document is stably tracked and capture is recommended. */
+  isCaptureReady(): boolean {
+    return this._state === "tracking" && this._stabilityScore >= this.opts.captureReadyStability;
+  }
+
   /**
    * Process a new detection result. Call this on every frame where full detection ran.
    */
   update(result: DetectionResult): TrackingResult {
-    this.cyclesSinceDetection = 0;
+    this.ticksSinceDetection = 0;
     this._detectionConfidence = result.confidence?.value ?? 0;
     this._rawDetectedQuad = result.quad;
 
@@ -131,24 +150,22 @@ export class DocumentTracker {
    * Advance one frame without new detection data. Call this on throttled/skipped frames.
    */
   tick(): TrackingResult {
-    this.cyclesSinceDetection++;
+    this.ticksSinceDetection++;
 
     if (this._state === "tracking") {
-      // Decay confidence slowly between detections; faster if detections have been absent too long.
-      const decayRate = this.cyclesSinceDetection > 15 ? 0.96 : 0.995;
-      this._trackingConfidence *= decayRate;
+      // Gentle per-tick decay between detection runs; slightly faster once we pass the expected gap.
+      const overdue = this.ticksSinceDetection > this.opts.ticksBetweenDetections;
+      this._trackingConfidence *= overdue ? 0.98 : 0.995;
       if (this._trackingConfidence < this.opts.lostThreshold) {
         this._enterLost();
       }
     } else if (this._state === "lost") {
-      this.cyclesInLost++;
-      if (this.cyclesInLost > this.opts.maxCyclesLost) {
+      this.ticksInLost++;
+      if (this.ticksInLost > this.opts.maxCyclesLost * this.opts.ticksBetweenDetections) {
         this._enterSearching();
       }
-    } else if (this._state === "detected" && this.cyclesSinceDetection > 8) {
-      // Waiting too long for confirmation — give up.
-      this._enterSearching();
     }
+    // Detected confirmation is driven only by consecutive good `update()` calls — not tick gaps.
 
     this._updateVelocity();
     this._updateStability();
@@ -169,6 +186,7 @@ export class DocumentTracker {
       this._smoothedQuad = candidate;
       this._trackingConfidence = detConf * 0.6;
       this.consecutiveGoodCycles = 1;
+      this.consecutiveBadCycles = 0;
       this._state = "detected";
     }
   }
@@ -178,11 +196,15 @@ export class DocumentTracker {
       this._smooth(candidate);
       this._trackingConfidence = this._trackingConfidence * 0.6 + detConf * 0.4;
       this.consecutiveGoodCycles++;
+      this.consecutiveBadCycles = 0;
       if (this.consecutiveGoodCycles >= this.opts.framesForTracking) {
         this._state = "tracking";
       }
     } else {
-      this._enterSearching();
+      this.consecutiveBadCycles++;
+      if (this.consecutiveBadCycles >= this.opts.maxBadDetectionCycles) {
+        this._enterSearching();
+      }
     }
   }
 
@@ -206,11 +228,13 @@ export class DocumentTracker {
       this._smooth(candidate);
       this._trackingConfidence = 0.55;
       this.consecutiveGoodCycles = this.opts.framesForTracking;
-      this.cyclesInLost = 0;
+      this.consecutiveBadCycles = 0;
+      this.ticksInLost = 0;
+      this.lostDetectionFailures = 0;
       this._state = "tracking";
     } else {
-      this.cyclesInLost++;
-      if (this.cyclesInLost > this.opts.maxCyclesLost) {
+      this.lostDetectionFailures++;
+      if (this.lostDetectionFailures > this.opts.maxCyclesLost) {
         this._enterSearching();
       }
     }
@@ -330,8 +354,10 @@ export class DocumentTracker {
 
   private _enterLost(): void {
     this._state = "lost";
-    this.cyclesInLost = 0;
+    this.ticksInLost = 0;
+    this.lostDetectionFailures = 0;
     this.consecutiveGoodCycles = 0;
+    this.consecutiveBadCycles = 0;
   }
 
   private _enterSearching(): void {
@@ -342,7 +368,10 @@ export class DocumentTracker {
     this._cornerVelocity = 0;
     this._cornerDeltas = null;
     this.consecutiveGoodCycles = 0;
-    this.cyclesInLost = 0;
+    this.consecutiveBadCycles = 0;
+    this.ticksInLost = 0;
+    this.lostDetectionFailures = 0;
+    this.ticksSinceDetection = 0;
     this.prevSmoothedQuad = null;
     this.velocityHistory = [];
   }

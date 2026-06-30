@@ -10,6 +10,8 @@ export interface ScoringWeights {
   area: number;
   aspectRatio: number;
   interiorConsistency: number;
+  envelopeSupport: number;
+  borderMargin: number;
 }
 
 export interface DetectionConfig {
@@ -19,6 +21,8 @@ export interface DetectionConfig {
   previewMaxDim: number;
   /** Multi-scale factors (of processMaxDim) tried in full mode, smallest→largest. */
   scales: number[];
+  /** Preview-mode scale factors (of previewMaxDim) for live / fast detection. */
+  previewScales: number[];
   gaussianKernel: number;
 
   // Color-aware gradient (features/colorGradient.ts).
@@ -63,55 +67,110 @@ export interface DetectionConfig {
 
   // Confidence (scoring/confidence.ts).
   confidenceScoreGapTarget: number; // score gap (winner − runner-up) that maps to full gap-confidence
+
+  // Border-margin scoring (scoring/components.ts) — rejects interior text lines & overshoot.
+  borderStripWidth: number; // px in feature space; offset for inner/outer strip samples
+  maxBorderSearch: number; // px to search outward/inward for a stronger parallel edge
+  outwardEdgeRatio: number; // parallel peak / edge mag above which the border is penalised
+  topMarginTextThreshold: number; // inner-strip text density above which the top edge is penalised
+  exteriorTextThreshold: number; // outer-strip text density above which the bottom edge is penalised
+
+  // Envelope contour candidate (candidates/envelope.ts) + winner re-ranking.
+  envelopeMaskThreshold: number; // combined color/shadow normalised level for the blob mask
+  envelopeColorWeight: number;
+  envelopeShadowWeight: number;
+  envelopeMorphKernelFraction: number;
+  envelopeDuplicateFraction: number; // mean corner distance (fraction of min dim) to treat as duplicate
+  envelopeShadowScoreWeight: number; // envelopeSupport: shadow vs color along the border
+  minEnvelopeSupport: number; // minimum envelopeSupport to compete in outer-quad re-ranking
+  winnerScoreSlack: number; // allow picking a larger quad within this score gap of the top Hough pick
+  preferredMinArea: number; // prefer winners at/above this area fraction when envelope is strong
+  minAreaGainForOuterWinner: number; // area gain needed to override a tighter top-scored candidate
+  /** Penalise winner re-ranking when area exceeds this fraction (oversized desk-inclusive quads). */
+  maxFitArea: number;
+  /** Long/short ratio for normal document pages; used to reject square interior text blocks. */
+  documentAspectRange: [number, number];
+
+  // Post-selection edge snap (refineQuad.ts).
+  edgeRefineSearch: number; // px in feature space to search along each edge normal
+  edgeRefineStep: number;
+  edgeRefinePasses: number;
+  /** 2-D corner search radius (px) after edge refinement. */
+  edgeRefineCornerRadius: number;
+  /** Re-snap the winning quad on the finest-scale feature maps after multi-scale search. */
+  finalRefineAtMaxScale: boolean;
 }
 
 export const DEFAULT_DETECTION_CONFIG: DetectionConfig = {
-  processMaxDim: 320,
-  previewMaxDim: 256,
-  scales: [0.25, 0.5, 1.0],
+  processMaxDim: 1920,
+  previewMaxDim: 640,
+  scales: [0.5, 0.75, 1.0],
+  previewScales: [1.0],
   gaussianKernel: 5,
 
-  chromaWeight: 7,
+  chromaWeight: 8,
 
   thetaBins: 256,
   rhoBucket: 2,
-  voteAngleWindow: 0.18,
-  magVoteFraction: 0.12,
-  nmsThetaRadius: 4,
-  nmsRhoRadius: 6,
-  maxCandidateLines: 60,
-  minLineScoreFraction: 0.04,
-  maxLinesPerGroup: 14,
+  voteAngleWindow: 0.16,
+  magVoteFraction: 0.1,
+  nmsThetaRadius: 3,
+  nmsRhoRadius: 5,
+  maxCandidateLines: 72,
+  minLineScoreFraction: 0.03,
+  maxLinesPerGroup: 18,
 
-  minQuadAreaFraction: 0.12,
+  minQuadAreaFraction: 0.1,
   maxQuadAreaFraction: 0.99,
-  maxCornerAngleDeviationDeg: 50,
-  cornerOutOfBoundsMargin: 0.08,
-  edgeSamples: 24,
+  maxCornerAngleDeviationDeg: 55,
+  cornerOutOfBoundsMargin: 0.1,
+  edgeSamples: 32,
 
   weights: {
-    edge: 0.35,
-    textDensity: 0.15,
-    area: 0.25,
-    aspectRatio: 0.1,
-    interiorConsistency: 0.15,
+    edge: 0.28,
+    textDensity: 0.12,
+    area: 0.2,
+    aspectRatio: 0.08,
+    interiorConsistency: 0.12,
+    envelopeSupport: 0.1,
+    borderMargin: 0.1,
   },
-  /** Interior text density at/above which a quad is fully "document-like"; prevents the score
-   *  from preferring a tight crop of the densest text over the complete page. */
   textDensitySaturation: 0.12,
-  aspectRatioRange: [1.1, 1.8],
+  aspectRatioRange: [1.0, 2.5],
 
-  textGridCells: 24,
+  textGridCells: 28,
   adaptiveBlockSize: 15,
   adaptiveC: 8,
   textCompMinFraction: 0.000005,
   textCompMaxFraction: 0.002,
 
-  shadowKernelFraction: 0.04,
-  // Shadow response is computed for debug/inspection but not folded into the Hough magnitude by
-  // default: on low-contrast pages its broad low-frequency response tends to strengthen interior
-  // text/region boundaries more than the faint page border. Raise to let it contribute votes.
+  shadowKernelFraction: 0.035,
   shadowWeight: 0,
 
-  confidenceScoreGapTarget: 0.15,
+  confidenceScoreGapTarget: 0.14,
+
+  borderStripWidth: 6,
+  maxBorderSearch: 40,
+  outwardEdgeRatio: 0.4,
+  topMarginTextThreshold: 0.12,
+  exteriorTextThreshold: 0.06,
+
+  envelopeMaskThreshold: 0.15,
+  envelopeColorWeight: 0.4,
+  envelopeShadowWeight: 0.6,
+  envelopeMorphKernelFraction: 0.025,
+  envelopeDuplicateFraction: 0.05,
+  envelopeShadowScoreWeight: 0.68,
+  minEnvelopeSupport: 0.14,
+  winnerScoreSlack: 0.06,
+  preferredMinArea: 0.18,
+  minAreaGainForOuterWinner: 0.16,
+  maxFitArea: 0.62,
+  documentAspectRange: [1.2, 1.9],
+
+  edgeRefineSearch: 40,
+  edgeRefineStep: 1,
+  edgeRefinePasses: 3,
+  edgeRefineCornerRadius: 18,
+  finalRefineAtMaxScale: true,
 };

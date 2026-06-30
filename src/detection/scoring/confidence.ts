@@ -25,7 +25,8 @@ export function computeConfidence(
   _maps: FeatureMaps,
   config: DetectionConfig,
 ): Confidence {
-  const edgeStrength = best.components.edge;
+  const edgeStrength =
+    best.components.edge * 0.4 + best.components.envelopeSupport * 0.45 + best.components.borderMargin * 0.15;
   const textDensity = best.components.textDensity;
   const geometricPlausibility = best.components.aspectRatio;
 

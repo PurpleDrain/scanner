@@ -1,17 +1,17 @@
 import type { CV, Mat as CvMat } from "@techstark/opencv-js";
 import { DEFAULT_DETECTION_CONFIG, type DetectionConfig } from "./config";
 import { orderCorners, scaleQuad } from "./geometry";
-import { detectAtScale, detectMultiScale, type ScaleResult } from "./multiScale";
+import { detectMultiScale, detectPreviewMultiScale, type ScaleResult } from "./multiScale";
 import { Profiler } from "./profiler";
 import type { DetectionDebug, DetectionResult, DetectOptions, Quad } from "./types";
 
 /**
  * Top-level document detector — the pipeline orchestrator.
  *
- * - "preview" mode (default for live frames): a single low-resolution pass with the color-aware
- *   gradient + Hough + light scoring. Fast enough for ~30fps; skips text-density/shadow/multi-scale.
- * - "full" mode (capture): multi-scale search with the complete feature set, interior scoring and
- *   confidence; optionally emits debug buffers.
+ * - "preview" mode (live frames): single-scale pass with color gradient, Hough, envelope
+ *   candidate, and light edge refinement — tuned for responsiveness.
+ * - "full" mode (capture): multi-scale search with surface candidates, confidence, and
+ *   finest-scale refinement; optionally emits debug buffers.
  *
  * Returns corners in SOURCE-image coordinates, canonicalised to [TL, TR, BR, BL].
  */
@@ -28,7 +28,7 @@ export function detectDocument(
   const winner: ScaleResult | null =
     mode === "full"
       ? detectMultiScale(cv, src, config, debug, profiler)
-      : detectAtScale(cv, src, config.previewMaxDim, config, false, debug, profiler);
+      : detectPreviewMultiScale(cv, src, config, debug, profiler);
 
   const timings = profiler.get();
 

@@ -37,6 +37,9 @@ export interface ScoreComponents {
   area: number;
   aspectRatio: number;
   interiorConsistency: number;
+  /** Mean shadow + color response along the quad border (page outline in debug maps). */
+  envelopeSupport: number;
+  borderMargin: number;
   total: number;
 }
 
@@ -74,9 +77,10 @@ export interface FeatureMaps {
   magnitudeA: Float32Array;
   magnitudeB: Float32Array;
 
-  // Full-mode-only features.
+  // Text-density and shadow (low-frequency page outline).
   textDensity?: Float32Array; // 0..1 local text likelihood
   shadow?: Float32Array; // low-frequency (shadow) edge response
+  shadowMax?: number;
   labL?: Float32Array; // retained Lab channels for interior-consistency scoring
   labA?: Float32Array;
   labB?: Float32Array;
@@ -106,6 +110,23 @@ export interface DetectionResult {
   mode: DetectionMode;
   timings: StageTimings;
   debug?: DetectionDebug;
+  /** Present when CV and ML ran in parallel; indicates which path won fusion. */
+  detector?: "cv" | "ml";
+  /** Raw CV / ML outputs before fusion (debug). */
+  sources?: DetectionParallelSources;
+}
+
+/** Per-path detection snapshot for parallel CV+ML debug. */
+export interface DetectionSourceSummary {
+  quad: Quad | null;
+  confidence: number | null;
+  timings: StageTimings;
+  components?: ScoreComponents | null;
+}
+
+export interface DetectionParallelSources {
+  cv: DetectionSourceSummary;
+  ml: DetectionSourceSummary | null;
 }
 
 export interface DetectOptions {

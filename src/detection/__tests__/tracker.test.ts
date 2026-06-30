@@ -11,7 +11,18 @@ function makeResult(quad: Quad | null, confidence: number): DetectionResult {
     confidence: quad
       ? { value: confidence, edgeStrength: confidence, quadValidity: 1, scoreGap: 0.2, textDensity: 0.5, geometricPlausibility: 1 }
       : null,
-    components: quad ? { edge: 0.8, textDensity: 0.5, area: 0.7, aspectRatio: 1.0, interiorConsistency: 0.6, total: 0.7 } : null,
+    components: quad
+      ? {
+          edge: 0.8,
+          textDensity: 0.5,
+          area: 0.7,
+          aspectRatio: 1.0,
+          interiorConsistency: 0.6,
+          envelopeSupport: 0.65,
+          borderMargin: 0.6,
+          total: 0.7,
+        }
+      : null,
     runnerUp: null,
     scale: 1,
     mode: "full",
@@ -69,9 +80,11 @@ describe("DocumentTracker — state machine", () => {
     expect(r.state).toBe("tracking");
   });
 
-  it("resets from detected → searching on detection failure", () => {
-    const tracker = new DocumentTracker({ framesForTracking: 3 });
+  it("resets from detected → searching after repeated detection failures", () => {
+    const tracker = new DocumentTracker({ framesForTracking: 3, maxBadDetectionCycles: 2 });
     tracker.update(makeResult(DOC, 0.85));
+    tracker.update(makeResult(null, 0));
+    expect(tracker.state).toBe("detected");
     const r = tracker.update(makeResult(null, 0));
     expect(r.state).toBe("searching");
     expect(r.quad).toBeNull();
@@ -264,11 +277,29 @@ describe("DocumentTracker — candidate association", () => {
     const resultWithRunnerUp: DetectionResult = {
       quad: farWinner,
       confidence: { value: 0.85, edgeStrength: 0.8, quadValidity: 1, scoreGap: 0.1, textDensity: 0.5, geometricPlausibility: 1 },
-      components: { edge: 0.8, textDensity: 0.5, area: 0.7, aspectRatio: 1.0, interiorConsistency: 0.6, total: 0.7 },
+      components: {
+        edge: 0.8,
+        textDensity: 0.5,
+        area: 0.7,
+        aspectRatio: 1.0,
+        interiorConsistency: 0.6,
+        envelopeSupport: 0.65,
+        borderMargin: 0.6,
+        total: 0.7,
+      },
       runnerUp: {
         corners: closeRunnerUp, // scale=1 → feature == source coords
         lines: [] as any,
-        components: { edge: 0.7, textDensity: 0.5, area: 0.65, aspectRatio: 1.0, interiorConsistency: 0.5, total: 0.65 },
+        components: {
+          edge: 0.7,
+          textDensity: 0.5,
+          area: 0.65,
+          aspectRatio: 1.0,
+          interiorConsistency: 0.5,
+          envelopeSupport: 0.55,
+          borderMargin: 0.5,
+          total: 0.65,
+        },
         score: 0.65,
       },
       scale: 1,

@@ -30,6 +30,78 @@ export function angularDistance(a: number, b: number): number {
   return d;
 }
 
+/**
+ * Splits Hough lines into two near-perpendicular orientation groups using a score-weighted
+ * histogram. More robust than clustering from the first line when the document is rotated.
+ */
+export function clusterLinesIntoGroups(lines: Line[]): [Line[], Line[]] | null {
+  if (lines.length < 4) return null;
+
+  const bins = 180;
+  const hist = new Float64Array(bins);
+  for (const line of lines) {
+    const bin = Math.min(bins - 1, Math.floor((line.theta / Math.PI) * bins));
+    hist[bin] += line.score;
+  }
+
+  let peak1Bin = 0;
+  let peak1Score = -1;
+  for (let i = 0; i < bins; i++) {
+    if (hist[i] > peak1Score) {
+      peak1Score = hist[i];
+      peak1Bin = i;
+    }
+  }
+  const theta1 = ((peak1Bin + 0.5) / bins) * Math.PI;
+
+  let peak2Bin = -1;
+  let peak2Score = -1;
+  const minSep = Math.PI / 6;
+  for (let i = 0; i < bins; i++) {
+    const theta = ((i + 0.5) / bins) * Math.PI;
+    if (angularDistance(theta, theta1) < minSep) continue;
+    if (hist[i] > peak2Score) {
+      peak2Score = hist[i];
+      peak2Bin = i;
+    }
+  }
+  if (peak2Bin < 0) return null;
+
+  const theta2 = ((peak2Bin + 0.5) / bins) * Math.PI;
+  const groupA: Line[] = [];
+  const groupB: Line[] = [];
+
+  for (const line of lines) {
+    if (angularDistance(line.theta, theta1) <= angularDistance(line.theta, theta2)) {
+      groupA.push(line);
+    } else {
+      groupB.push(line);
+    }
+  }
+
+  if (groupA.length < 2 || groupB.length < 2) return null;
+  return [groupA, groupB];
+}
+
+/** How parallel opposite edge pairs are (1 = strong perspective rectangle / axis-aligned rect). */
+export function perspectiveParallelismScore(corners: Quad): number {
+  const edgeAngle = (i: number): number => {
+    const a = corners[i];
+    const b = corners[(i + 1) % 4];
+    return Math.atan2(b.y - a.y, b.x - a.x);
+  };
+
+  const parallel = (a: number, b: number): number => {
+    let d = Math.abs(a - b) % Math.PI;
+    if (d > Math.PI / 2) d = Math.PI - d;
+    return Math.max(0, 1 - d / 0.4);
+  };
+
+  const topBottom = parallel(edgeAngle(0), edgeAngle(2));
+  const leftRight = parallel(edgeAngle(1), edgeAngle(3));
+  return Math.max(topBottom, leftRight) * 0.6 + (topBottom + leftRight) / 2 * 0.4;
+}
+
 export function polygonArea(corners: Quad): number {
   let area = 0;
   for (let i = 0; i < 4; i++) {
