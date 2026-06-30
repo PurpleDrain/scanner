@@ -1,4 +1,6 @@
-export { analyzeDocumentQuality } from "./analyzeDocumentQuality";
+export { analyzeQualityRgba } from "./rgba/analyzeQualityRgba";
+export { precaptureGuidance, type PrecaptureGuidance } from "./rgba/precaptureGuidance";
+export { computeBlurMetricRgba, computeBrightnessMetricRgba, computeGlareMetricRgba } from "./rgba/metrics";
 export { DEFAULT_QUALITY_CONFIG } from "./config";
 export type {
   QualityConfig,
@@ -26,11 +28,7 @@ export type {
 } from "./types";
 
 // Pure metric/scoring building blocks, exported for composability and testing.
-export { computeBlurMetric } from "./metrics/blur";
-export { computeBrightnessMetric } from "./metrics/brightness";
-export { computeGlareMetric } from "./metrics/glare";
 export { computeEdgeMetrics } from "./metrics/perspective";
-export { computeResolutionMetric } from "./metrics/resolution";
 export { scoreBlur } from "./scoring/blur";
 export { scoreBrightness } from "./scoring/brightness";
 export { scoreGlare } from "./scoring/glare";

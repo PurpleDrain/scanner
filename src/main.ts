@@ -3,54 +3,110 @@ import { drawQuadOutline, type Quad } from "./documentScanner";
 import { warpRgba } from "./warp/webglWarp";
 import { scaleWorkerResult } from "./detection/fuseDetection";
 import { scaleQuad } from "./detection/geometry";
-import { capturePreviewRgba, PREVIEW_DETECT_MAX_DIM } from "./detection/previewFrame";
-import type { DetectionResult, DetectionSourceSummary, StageTimings } from "./detection/types";
+import { capturePreviewRgba, CAPTURE_DETECT_MAX_DIM, PREVIEW_DETECT_MAX_DIM } from "./detection/previewFrame";
+import type { DetectionResult } from "./detection/types";
 import { ParallelDetectionClient } from "./detection/worker/ParallelDetectionClient";
 import type { WorkerDetectionResult } from "./detection/worker/types";
-import { DEBUG_LAYERS, renderDebugLayers, type DebugLayer } from "./detection/debug/render";
-import { DocumentTracker, type TrackingResult } from "./detection/tracker";
+import { DocumentTracker, type TrackerOptions, type TrackingResult } from "./detection/tracker";
+import { analyzeQualityRgba } from "./quality/rgba/analyzeQualityRgba";
+import { precaptureGuidance } from "./quality/rgba/precaptureGuidance";
+import type { DocumentQualityResult } from "./quality/types";
+import { CornerEditor } from "./ui/cornerEditor";
+import { enhanceAutoContrast } from "./enhance/autoContrast";
 
 const statusEl = document.querySelector<HTMLParagraphElement>("#status")!;
 const uploadStatusEl = document.querySelector<HTMLParagraphElement>("#upload-status")!;
-const modeWebcamBtn = document.querySelector<HTMLButtonElement>("#mode-webcam")!;
-const modeUploadBtn = document.querySelector<HTMLButtonElement>("#mode-upload")!;
-const webcamPanel = document.querySelector<HTMLElement>("#webcam-panel")!;
-const uploadPanel = document.querySelector<HTMLElement>("#upload-panel")!;
-const resultPanel = document.querySelector<HTMLElement>("#result-panel")!;
 const video = document.querySelector<HTMLVideoElement>("#video")!;
 const overlayCanvas = document.querySelector<HTMLCanvasElement>("#overlay-canvas")!;
-const debugCanvas = document.querySelector<HTMLCanvasElement>("#debug-canvas")!;
 const captureBtn = document.querySelector<HTMLButtonElement>("#capture-btn")!;
+const galleryBtn = document.querySelector<HTMLButtonElement>("#gallery-btn")!;
+const cameraPermissionEl = document.querySelector<HTMLElement>("#camera-permission")!;
+const cameraPermissionTextEl = document.querySelector<HTMLParagraphElement>("#camera-permission-text")!;
+const cameraPermitBtn = document.querySelector<HTMLButtonElement>("#camera-permit-btn")!;
+const cameraPermissionGalleryBtn = document.querySelector<HTMLButtonElement>("#camera-permission-gallery-btn")!;
 const fileInput = document.querySelector<HTMLInputElement>("#file-input")!;
 const uploadCanvas = document.querySelector<HTMLCanvasElement>("#upload-canvas")!;
 const resultCanvas = document.querySelector<HTMLCanvasElement>("#result-canvas")!;
 const downloadLink = document.querySelector<HTMLAnchorElement>("#download-link")!;
 const debugListEl = document.querySelector<HTMLDListElement>("#debug-list")!;
 const debugLayersEl = document.querySelector<HTMLDivElement>("#debug-layers")!;
+const debugModal = document.querySelector<HTMLDialogElement>("#debug-modal")!;
+const debugOpenBtn = document.querySelector<HTMLButtonElement>("#debug-open-btn")!;
+const debugCloseBtn = document.querySelector<HTMLButtonElement>("#debug-close-btn")!;
+const editorModal = document.querySelector<HTMLDialogElement>("#editor-modal")!;
+const editorBodyEl = document.querySelector<HTMLElement>("#editor-body")!;
+const editorCanvas = document.querySelector<HTMLCanvasElement>("#editor-canvas")!;
+const flattenBtn = document.querySelector<HTMLButtonElement>("#flatten-btn")!;
+const editorBackBtn = document.querySelector<HTMLButtonElement>("#editor-back")!;
+const resultModal = document.querySelector<HTMLDialogElement>("#result-modal")!;
+const resultDoneBtn = document.querySelector<HTMLButtonElement>("#result-done-btn")!;
+const resultDoneBtnFooter = document.querySelector<HTMLButtonElement>("#result-done-btn-footer")!;
+const precaptureHintsEl = document.querySelector<HTMLDivElement>("#precapture-hints")!;
+const qualityGradeEl = document.querySelector<HTMLSpanElement>("#quality-grade")!;
+const qualityRecsEl = document.querySelector<HTMLUListElement>("#quality-recommendations")!;
+const enhanceToggle = document.querySelector<HTMLInputElement>("#enhance-toggle")!;
 
 const overlayCtx = overlayCanvas.getContext("2d")!;
-const debugCtx = debugCanvas.getContext("2d")!;
 const uploadCtx = uploadCanvas.getContext("2d")!;
 
-// Preview detection: small frames; ML-only when the model is loaded.
-const LIVE_DETECT_INTERVAL_ML = 1;
-const LIVE_DETECT_INTERVAL_CV = 3;
+const LIVE_DETECT_TICKS_BETWEEN_ML = 8;
+const LIVE_DETECT_TICKS_FALLBACK = 3;
+const SOFT_CAPTURE_MIN_TRACKING_CONFIDENCE = 0.35;
+const SOFT_CAPTURE_MIN_DETECTION_CONFIDENCE = 0.45;
 const EXPORT_MIN_DOCUMENT_WIDTH = 2400;
 const UPLOAD_PREVIEW_MAX_WIDTH = 720;
 const liveDetectCanvas = document.createElement("canvas");
 const liveDetectCtx = liveDetectCanvas.getContext("2d")!;
-const STABILITY_CAPTURE_THRESHOLD = 0.75;
 
-function liveDetectInterval(): number {
-  return detectionWorker?.isMlAvailable ? LIVE_DETECT_INTERVAL_ML : LIVE_DETECT_INTERVAL_CV;
+function isMobileLikeDevice(): boolean {
+  return window.matchMedia("(hover: none) and (pointer: coarse)").matches;
 }
 
-async function detectAtPreviewResolution(
+/** Expected animation frames between ML results — used for tracker confidence decay. */
+function expectedTicksBetweenMlResults(): number {
+  return detectionWorker?.isMlAvailable ? LIVE_DETECT_TICKS_BETWEEN_ML : LIVE_DETECT_TICKS_FALLBACK;
+}
+
+/** Tracker tuning — mobile gets faster capture-ready with more handheld motion tolerance. */
+function createTrackerOptions(): TrackerOptions {
+  const ticksBetweenDetections = expectedTicksBetweenMlResults();
+  if (!isMobileLikeDevice()) {
+    return { ticksBetweenDetections };
+  }
+  return {
+    ticksBetweenDetections,
+    framesForTracking: 1,
+    captureReadyStability: 0.4,
+    stabilityBlend: 0.22,
+    velocityStabilityScale: 32,
+    trackingEntryStability: 0.35,
+    alphaAtLowMotion: 0.78,
+    alphaAtHighMotion: 0.35,
+    alphaWhenStable: 0.94,
+    alphaOnLargeChange: 0.12,
+    motionThreshold: 35,
+    stableMotionThresholdScale: 1.8,
+    largeChangeMotionThreshold: 55,
+    largeChangeStabilityPenalty: 0.5,
+  };
+}
+
+let captureReadyStability = 0.75;
+
+/** Full-resolution (or high-res) detection for capture/upload — refines corners after a quick live lock. */
+async function detectAtCaptureResolution(
   source: CanvasImageSource,
   srcWidth: number,
   srcHeight: number,
 ): Promise<WorkerDetectionResult> {
-  const frame = capturePreviewRgba(liveDetectCtx, liveDetectCanvas, source, srcWidth, srcHeight);
+  const frame = capturePreviewRgba(
+    liveDetectCtx,
+    liveDetectCanvas,
+    source,
+    srcWidth,
+    srcHeight,
+    CAPTURE_DETECT_MAX_DIM,
+  );
   const result = await detectionWorker.detectPreview(
     frame.width,
     frame.height,
@@ -60,6 +116,16 @@ async function detectAtPreviewResolution(
   return scaleWorkerResult(result, frame.toSourceScale, frame.toSourceScale);
 }
 
+/** Live preview is lenient; capture is allowed once a document is roughly locked. */
+function canUseShutter(): boolean {
+  if (!lastWebcamQuad || !trackingResult?.quad) return false;
+  if (tracker?.isCaptureReady()) return true;
+  const tr = trackingResult;
+  if (tr.state === "tracking" && tr.trackingConfidence >= SOFT_CAPTURE_MIN_TRACKING_CONFIDENCE) return true;
+  if (tr.state === "detected" && tr.detectionConfidence >= SOFT_CAPTURE_MIN_DETECTION_CONFIDENCE) return true;
+  return false;
+}
+
 let detectionWorker: ParallelDetectionClient;
 let mediaStream: MediaStream | null = null;
 let detectionLoopHandle: number | null = null;
@@ -67,86 +133,289 @@ let lastWebcamQuad: Quad | null = null;
 let currentVideoTrack: MediaStreamTrack | null = null;
 let lastFlattenedSize: { width: number; height: number } | null = null;
 
-// Detection diagnostics surfaced in the debug panel.
 let liveResult: DetectionResult | null = null;
 let captureResult: DetectionResult | null = null;
 let captureSrcWidth = 0;
 let captureSrcHeight = 0;
-let lastUploadImage: HTMLImageElement | null = null;
-let lastUploadPreviewScale = 1;
+
+let editor: CornerEditor | null = null;
+let editorStill: { canvas: HTMLCanvasElement; width: number; height: number } | null = null;
+let lastWarpRaw: { data: Uint8ClampedArray; width: number; height: number } | null = null;
+let lastQuality: DocumentQualityResult | null = null;
 let fps = 0;
 let lastTickTime = 0;
 let frameCounter = 0;
 let detectionCycleCounter = 0;
 let liveLoopGeneration = 0;
-const activeLayers = new Set<DebugLayer>(["selected"]);
 
-// Temporal tracker and its current output.
 let tracker: DocumentTracker | null = null;
 let trackingResult: TrackingResult | null = null;
+let lastPrecaptureHintsKey = "";
 
-// Live overlay debug toggles (separate from capture debug layers).
-const liveOverlayLayers = new Set<"rawDetected" | "velocity" | "cvSource" | "mlSource">([
-  "cvSource",
-  "mlSource",
-  "rawDetected",
-]);
+const liveOverlayLayers = new Set<"rawDetected" | "velocity">(["rawDetected"]);
 
 type Mode = "webcam" | "upload";
-
 let activeMode: Mode = "webcam";
+
+interface CoverTransform {
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+}
+
+function openModal(dialog: HTMLDialogElement): void {
+  if (!dialog.open) dialog.showModal();
+}
+
+function closeModal(dialog: HTMLDialogElement): void {
+  if (dialog.open) dialog.close();
+}
 
 function setStatus(message: string): void {
   if (activeMode === "upload") {
     uploadStatusEl.textContent = message;
-  } else {
-    statusEl.textContent = message;
   }
+  statusEl.textContent = message;
 }
 
-function setMode(mode: Mode): void {
-  activeMode = mode;
-  modeWebcamBtn.classList.toggle("active", mode === "webcam");
-  modeUploadBtn.classList.toggle("active", mode === "upload");
-  webcamPanel.classList.toggle("hidden", mode !== "webcam");
-  uploadPanel.classList.toggle("hidden", mode !== "upload");
-  resultPanel.classList.add("hidden");
-
-  if (mode === "webcam") {
-    void startWebcam();
-  } else {
-    stopWebcam();
-    renderDebugInfo();
-  }
+function videoCoverTransform(el: HTMLVideoElement): CoverTransform {
+  const scale = Math.max(el.clientWidth / el.videoWidth, el.clientHeight / el.videoHeight);
+  const displayW = el.videoWidth * scale;
+  const displayH = el.videoHeight * scale;
+  return {
+    scale,
+    offsetX: (el.clientWidth - displayW) / 2,
+    offsetY: (el.clientHeight - displayH) / 2,
+  };
 }
 
-// Requested as an "ideal" floor; maximizeTrackResolution() below pushes the actual negotiated
-// resolution up to the device's true max afterward, since browsers may otherwise settle for a
-// lower default even when a high "ideal" is given.
-const REQUESTED_WIDTH = 4096;
-const REQUESTED_HEIGHT = 2160;
+/** Sync overlay canvas to display pixels; returns cover transform for mapping source quads. */
+function syncOverlaySize(): CoverTransform | null {
+  if (!video.videoWidth || !video.clientWidth) return null;
+  const cw = video.clientWidth;
+  const ch = video.clientHeight;
+  if (overlayCanvas.width !== cw || overlayCanvas.height !== ch) {
+    overlayCanvas.width = cw;
+    overlayCanvas.height = ch;
+  }
+  return videoCoverTransform(video);
+}
 
-async function startWebcam(): Promise<void> {
-  if (mediaStream) return;
-  let stream: MediaStream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
+function mapQuadToDisplay(quad: Quad, t: CoverTransform): Quad {
+  return quad.map((p) => ({
+    x: p.x * t.scale + t.offsetX,
+    y: p.y * t.scale + t.offsetY,
+  })) as Quad;
+}
+
+function cameraPrerequisiteMessage(): string | null {
+  if (!window.isSecureContext) {
+    return "Camera requires HTTPS. On iPhone, open the https:// address from the dev server (not http://), accept the certificate warning, then tap Allow camera.";
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    return "Camera is not available in this browser. Use Safari, or choose from gallery.";
+  }
+  return null;
+}
+
+/** Progressive constraint fallbacks — iOS Safari often rejects strict facingMode + resolution combos. */
+async function requestCameraStream(): Promise<MediaStream> {
+  const prerequisite = cameraPrerequisiteMessage();
+  if (prerequisite) throw new Error(prerequisite);
+
+  const attempts: MediaStreamConstraints[] = [
+    {
       video: {
-        facingMode: "environment",
-        width: { ideal: REQUESTED_WIDTH },
-        height: { ideal: REQUESTED_HEIGHT },
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
       },
       audio: false,
-    });
+    },
+    { video: { facingMode: { ideal: "environment" } }, audio: false },
+    { video: { facingMode: "environment" }, audio: false },
+    { video: true, audio: false },
+  ];
+
+  let lastError: unknown;
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (err) {
+      lastError = err;
+      if (
+        err instanceof DOMException &&
+        (err.name === "NotAllowedError" || err.name === "PermissionDeniedError")
+      ) {
+        throw err;
+      }
+    }
+  }
+  throw lastError ?? new Error("Camera unavailable");
+}
+
+function cameraErrorMessage(err: unknown): { card: string; status: string } {
+  const prerequisite = cameraPrerequisiteMessage();
+  if (prerequisite) {
+    return { card: prerequisite, status: "Camera needs HTTPS." };
+  }
+  if (err instanceof Error && !(err instanceof DOMException)) {
+    return { card: err.message, status: "Could not access the camera." };
+  }
+  if (err instanceof DOMException) {
+    switch (err.name) {
+      case "NotAllowedError":
+      case "PermissionDeniedError":
+        return {
+          card: "Camera access was denied. In Settings → Safari → Camera, allow access for this site, then tap Allow camera again.",
+          status: "Camera permission denied.",
+        };
+      case "NotFoundError":
+        return {
+          card: "No camera found on this device. Choose from gallery instead.",
+          status: "No camera found.",
+        };
+      case "NotReadableError":
+        return {
+          card: "Camera is in use by another app. Close it and try again.",
+          status: "Camera is busy.",
+        };
+      case "SecurityError":
+        return {
+          card: "Camera blocked — use the https:// URL (not http://) and accept the security certificate on your iPhone.",
+          status: "Camera blocked (insecure page).",
+        };
+      case "OverconstrainedError":
+        return {
+          card: "Could not open the camera with the requested settings. Try again or choose from gallery.",
+          status: "Camera constraints not supported.",
+        };
+      default:
+        return {
+          card: `Could not access the camera (${err.name}). Try again or choose from gallery.`,
+          status: "Could not access the camera.",
+        };
+    }
+  }
+  return {
+    card: "Could not access the camera. Try again or choose from gallery.",
+    status: "Could not access the camera.",
+  };
+}
+
+function showCameraPermission(message?: string): void {
+  cameraPermissionEl.classList.remove("hidden");
+  cameraPermissionTextEl.textContent =
+    message ?? "Allow camera access to scan documents live.";
+}
+
+function hideCameraPermission(): void {
+  cameraPermissionEl.classList.add("hidden");
+}
+
+const CAMERA_CONSENT_KEY = "scanner.cameraConsent.v1";
+
+function hasStoredCameraConsent(): boolean {
+  try {
+    return localStorage.getItem(CAMERA_CONSENT_KEY) === "1";
   } catch {
-    setStatus("Could not access the webcam. Check permissions, or use Upload Image instead.");
+    return false;
+  }
+}
+
+function storeCameraConsent(): void {
+  try {
+    localStorage.setItem(CAMERA_CONSENT_KEY, "1");
+  } catch {
+    // private browsing / storage blocked
+  }
+}
+
+function clearStoredCameraConsent(): void {
+  try {
+    localStorage.removeItem(CAMERA_CONSENT_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+/** Returns granted / denied / prompt, or null if the Permissions API is unavailable. */
+async function queryCameraPermission(): Promise<PermissionState | null> {
+  try {
+    if (!navigator.permissions?.query) return null;
+    const status = await navigator.permissions.query({ name: "camera" as PermissionName });
+    status.onchange = () => {
+      if (status.state === "granted") storeCameraConsent();
+      if (status.state === "denied") clearStoredCameraConsent();
+    };
+    return status.state;
+  } catch {
+    return null;
+  }
+}
+
+async function maybeAutoStartCamera(): Promise<void> {
+  const prerequisite = cameraPrerequisiteMessage();
+  if (prerequisite) {
+    showCameraPermission(prerequisite);
     return;
   }
-  // The user may have switched back to Upload mode while the permission prompt / camera was still
-  // starting up — bail out without touching state.
+
+  const permission = await queryCameraPermission();
+  const remembered = hasStoredCameraConsent();
+
+  if (permission === "denied") {
+    clearStoredCameraConsent();
+    const { card, status } = cameraErrorMessage(new DOMException("denied", "NotAllowedError"));
+    showCameraPermission(card);
+    setStatus(status);
+    return;
+  }
+  if (permission === "granted" || remembered) {
+    const started = await startWebcam({ silent: true });
+    if (started) return;
+    if (remembered) clearStoredCameraConsent();
+    showCameraPermission();
+    return;
+  }
+  if (permission === "prompt") {
+    showCameraPermission();
+    return;
+  }
+
+  // Permissions API unavailable — try starting silently when the browser already granted access.
+  const started = await startWebcam({ silent: true });
+  if (!started) showCameraPermission();
+}
+
+function openGalleryPicker(): void {
+  hideCameraPermission();
+  fileInput.value = "";
+  fileInput.click();
+}
+
+async function startWebcam(opts?: { silent?: boolean }): Promise<boolean> {
+  if (mediaStream) return true;
+  let stream: MediaStream;
+  try {
+    stream = await requestCameraStream();
+  } catch (err) {
+    if (
+      err instanceof DOMException &&
+      (err.name === "NotAllowedError" || err.name === "PermissionDeniedError")
+    ) {
+      clearStoredCameraConsent();
+    }
+    if (!opts?.silent) {
+      const { card, status } = cameraErrorMessage(err);
+      showCameraPermission(card);
+      setStatus(status);
+    }
+    return false;
+  }
   if (activeMode !== "webcam") {
     stream.getTracks().forEach((track) => track.stop());
-    return;
+    return false;
   }
   mediaStream = stream;
   const [track] = stream.getVideoTracks();
@@ -158,24 +427,23 @@ async function startWebcam(): Promise<void> {
 
   if (activeMode !== "webcam") {
     stopWebcam();
-    return;
+    return false;
   }
 
-  overlayCanvas.width = video.videoWidth;
-  overlayCanvas.height = video.videoHeight;
-  debugCanvas.width = video.videoWidth;
-  debugCanvas.height = video.videoHeight;
-  debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
+  syncOverlaySize();
+  const trackerOpts = createTrackerOptions();
+  captureReadyStability = trackerOpts.captureReadyStability ?? 0.75;
+  tracker = new DocumentTracker(trackerOpts);
 
-  tracker = new DocumentTracker({ ticksBetweenDetections: liveDetectInterval() });
-
+  hideCameraPermission();
+  storeCameraConsent();
   captureBtn.disabled = true;
   setStatus("Looking for a document… hold it flat within the frame.");
   renderDebugInfo();
   runDetectionLoop();
+  return true;
 }
 
-/** Re-requests the track's resolution at the device's reported maximum, since "ideal" alone isn't always honored. */
 async function maximizeTrackResolution(track: MediaStreamTrack): Promise<void> {
   const capabilities = track.getCapabilities?.();
   const maxWidth = capabilities?.width?.max;
@@ -184,7 +452,7 @@ async function maximizeTrackResolution(track: MediaStreamTrack): Promise<void> {
   try {
     await track.applyConstraints({ width: { ideal: maxWidth }, height: { ideal: maxHeight } });
   } catch {
-    // Device rejected the exact max — keep whatever resolution was already negotiated.
+    // keep negotiated resolution
   }
 }
 
@@ -203,13 +471,55 @@ function stopWebcam(): void {
   detectionCycleCounter = 0;
   trackingResult = null;
   tracker = null;
+  lastPrecaptureHintsKey = "";
   captureBtn.disabled = true;
-  if (activeMode === "webcam") debugListEl.replaceChildren();
+  precaptureHintsEl.replaceChildren();
+  debugListEl.replaceChildren();
+}
+
+function pauseLiveLoop(): void {
+  liveLoopGeneration++;
+  detectionWorker.cancelLiveFrames();
+  if (detectionLoopHandle !== null) {
+    cancelAnimationFrame(detectionLoopHandle);
+    detectionLoopHandle = null;
+  }
+  precaptureHintsEl.replaceChildren();
+}
+
+function resumeLiveLoop(): void {
+  if (activeMode === "webcam" && mediaStream && detectionLoopHandle === null && tracker) {
+    runDetectionLoop();
+  }
+}
+
+function renderPrecaptureHints(quad: Quad | null): void {
+  if (!quad) {
+    if (lastPrecaptureHintsKey !== "") {
+      lastPrecaptureHintsKey = "";
+      precaptureHintsEl.replaceChildren();
+    }
+    return;
+  }
+  const { hints } = precaptureGuidance(
+    quad,
+    undefined,
+    video.videoWidth > 0 ? { width: video.videoWidth, height: video.videoHeight } : undefined,
+  );
+  const hintsKey = hints.join("\0");
+  if (hintsKey === lastPrecaptureHintsKey) return;
+  lastPrecaptureHintsKey = hintsKey;
+  precaptureHintsEl.replaceChildren(
+    ...hints.map((text) => {
+      const chip = document.createElement("span");
+      chip.className = "hint-chip";
+      chip.textContent = text;
+      return chip;
+    }),
+  );
 }
 
 function runDetectionLoop(): void {
-  const scaleX = 1;
-  const scaleY = 1;
   frameCounter = 0;
   detectionCycleCounter = 0;
   const loopGeneration = ++liveLoopGeneration;
@@ -221,11 +531,10 @@ function runDetectionLoop(): void {
     if (lastTickTime) fps = fps * 0.8 + (1000 / Math.max(1, now - lastTickTime)) * 0.2;
     lastTickTime = now;
 
-    const cadence = liveDetectInterval();
-    if (frameCounter % cadence === 0) {
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (vw > 0 && vh > 0) {
       detectionCycleCounter++;
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
       const frame = capturePreviewRgba(liveDetectCtx, liveDetectCanvas, video, vw, vh);
       const toVideo = frame.toSourceScale;
       detectionWorker.submitLiveFrame(
@@ -241,34 +550,18 @@ function runDetectionLoop(): void {
           renderDebugInfo();
         },
       );
-    } else {
+    }
+
+    if (detectionWorker.isLiveBusy && tracker) {
       trackingResult = tracker.tick();
     }
 
-    // Redraw overlay every frame so the tracker's smoothed quad is always current.
-    renderLiveOverlay(scaleX, scaleY);
-
+    renderPrecaptureHints(trackingResult?.quad ?? null);
+    renderLiveOverlay();
     frameCounter++;
     detectionLoopHandle = requestAnimationFrame(tick);
   };
   detectionLoopHandle = requestAnimationFrame(tick);
-}
-
-/** Draws CV / ML source quads when the corresponding debug layer is enabled. */
-function drawParallelSourceQuads(
-  ctx: CanvasRenderingContext2D,
-  sources: DetectionResult["sources"],
-  scaleX: number,
-  scaleY: number,
-): void {
-  if (!sources) return;
-  const scale = (quad: Quad) => quad.map((p) => ({ x: p.x * scaleX, y: p.y * scaleY })) as Quad;
-  if (liveOverlayLayers.has("cvSource") && sources.cv.quad) {
-    drawQuadOutline(ctx, scale(sources.cv.quad), { stroke: "rgba(34,211,238,0.85)", lineWidth: 2, cornerRadius: 4 });
-  }
-  if (liveOverlayLayers.has("mlSource") && sources.ml?.quad) {
-    drawQuadOutline(ctx, scale(sources.ml.quad), { stroke: "rgba(232,121,249,0.85)", lineWidth: 2, cornerRadius: 4 });
-  }
 }
 
 function renderUploadPreview(image: HTMLImageElement, previewScale: number, result: DetectionResult | null): void {
@@ -276,7 +569,6 @@ function renderUploadPreview(image: HTMLImageElement, previewScale: number, resu
   uploadCanvas.height = Math.round(image.height * previewScale);
   uploadCtx.drawImage(image, 0, 0, uploadCanvas.width, uploadCanvas.height);
   if (!result) return;
-  drawParallelSourceQuads(uploadCtx, result.sources, previewScale, previewScale);
   if (liveOverlayLayers.has("rawDetected") && result.quad) {
     drawQuadOutline(uploadCtx, scaleQuad(result.quad, previewScale, previewScale), {
       stroke: "rgba(255,200,0,0.9)",
@@ -286,60 +578,62 @@ function renderUploadPreview(image: HTMLImageElement, previewScale: number, resu
   }
 }
 
-/** Draws the tracker output onto the overlay canvas. */
-function renderLiveOverlay(scaleX: number, scaleY: number): void {
+function renderLiveOverlay(): void {
+  const t = syncOverlaySize();
+  if (!t) return;
+
   overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
   if (!trackingResult) return;
 
   const tr = trackingResult;
 
-  // Pre-fusion CV / ML quads (debug overlays).
-  drawParallelSourceQuads(overlayCtx, liveResult?.sources, scaleX, scaleY);
-
-  // Fused quad before tracking (yellow).
   if (liveOverlayLayers.has("rawDetected") && tr.rawDetectedQuad) {
-    const rawScaled = tr.rawDetectedQuad.map((p) => ({ x: p.x * scaleX, y: p.y * scaleY })) as Quad;
-    drawQuadOutline(overlayCtx, rawScaled, { stroke: "rgba(255,200,0,0.65)", lineWidth: 1.5 });
+    drawQuadOutline(overlayCtx, mapQuadToDisplay(tr.rawDetectedQuad, t), {
+      stroke: "rgba(255,200,0,0.65)",
+      lineWidth: 1.5,
+    });
   }
 
-  // Smoothed/tracked quad — colour reflects the tracker state.
   if (tr.quad) {
-    const scaledQuad = tr.quad.map((p) => ({ x: p.x * scaleX, y: p.y * scaleY })) as Quad;
-    lastWebcamQuad = scaledQuad;
+    lastWebcamQuad = tr.quad;
+    const displayQuad = mapQuadToDisplay(tr.quad, t);
 
     const stateColor =
       tr.state === "tracking"
-        ? tr.stabilityScore >= STABILITY_CAPTURE_THRESHOLD
-          ? "#22c55e" // bright green — capture-ready
-          : "#4ade80" // softer green — tracking but not yet fully stable
+        ? tr.stabilityScore >= captureReadyStability
+          ? "#22c55e"
+          : "#4ade80"
         : tr.state === "detected"
-          ? "#facc15" // yellow — first seen, confirming
-          : "rgba(148,163,184,0.7)"; // gray — lost, showing last known position
+          ? "#facc15"
+          : "rgba(148,163,184,0.7)";
 
-    drawQuadOutline(overlayCtx, scaledQuad, { stroke: stateColor, lineWidth: tr.state === "tracking" ? 3 : 2 });
+    drawQuadOutline(overlayCtx, displayQuad, { stroke: stateColor, lineWidth: tr.state === "tracking" ? 3 : 2 });
 
-    // Corner velocity arrows (drawn over the quad).
     if (liveOverlayLayers.has("velocity") && tr.cornerDeltas) {
-      drawVelocityArrows(overlayCtx, scaledQuad, tr.cornerDeltas, scaleX, scaleY);
+      drawVelocityArrows(overlayCtx, displayQuad, tr.cornerDeltas, t.scale);
     }
   }
 
-  // Update status bar and capture readiness.
   updateStatusText(tr);
   const ready = tracker?.isCaptureReady() ?? false;
-  captureBtn.disabled = !ready;
-  captureBtn.textContent = ready ? "Capture" : "Hold steady…";
+  const shutterEnabled = canUseShutter();
+  captureBtn.disabled = !shutterEnabled;
+  captureBtn.classList.toggle("hold-steady", !shutterEnabled);
+  captureBtn.classList.toggle("capture-soft", shutterEnabled && !ready);
+  captureBtn.setAttribute(
+    "aria-label",
+    ready ? "Capture document" : shutterEnabled ? "Capture document" : "Hold steady",
+  );
 }
 
 function drawVelocityArrows(
   ctx: CanvasRenderingContext2D,
-  scaledQuad: Quad,
+  displayQuad: Quad,
   deltas: TrackingResult["cornerDeltas"],
-  scaleX: number,
-  scaleY: number,
+  displayScale: number,
 ): void {
   if (!deltas) return;
-  const SCALE = 8; // amplify tiny movements so they're visible
+  const AMP = 8;
 
   ctx.save();
   ctx.strokeStyle = "rgba(255,100,100,0.85)";
@@ -347,20 +641,18 @@ function drawVelocityArrows(
   ctx.lineWidth = 1.5;
 
   for (let i = 0; i < 4; i++) {
-    const cx = scaledQuad[i].x;
-    const cy = scaledQuad[i].y;
-    const dx = deltas[i].x * scaleX * SCALE;
-    const dy = deltas[i].y * scaleY * SCALE;
+    const cx = displayQuad[i].x;
+    const cy = displayQuad[i].y;
+    const dx = deltas[i].x * displayScale * AMP;
+    const dy = deltas[i].y * displayScale * AMP;
     const len = Math.hypot(dx, dy);
     if (len < 1) continue;
 
-    // Arrow shaft
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.lineTo(cx + dx, cy + dy);
     ctx.stroke();
 
-    // Arrowhead
     const angle = Math.atan2(dy, dx);
     const headLen = Math.min(8, len * 0.4);
     ctx.beginPath();
@@ -380,14 +672,20 @@ function updateStatusText(tr: TrackingResult): void {
       setStatus("Looking for a document… hold it flat within the frame.");
       break;
     case "detected":
-      setStatus("Document detected — aligning…");
+      setStatus(
+        tr.detectionConfidence >= SOFT_CAPTURE_MIN_DETECTION_CONFIDENCE
+          ? "Document detected — tap to capture."
+          : "Document detected — aligning…",
+      );
       break;
     case "tracking":
-      setStatus(
-        tr.stabilityScore >= STABILITY_CAPTURE_THRESHOLD
-          ? "Document locked — ready to capture."
-          : "Document tracked — stabilising… hold still.",
-      );
+      if (tr.stabilityScore >= captureReadyStability) {
+        setStatus("Document locked — ready to capture.");
+      } else if (tr.trackingConfidence >= SOFT_CAPTURE_MIN_TRACKING_CONFIDENCE) {
+        setStatus("Document tracked — tap to capture.");
+      } else {
+        setStatus("Document tracked — stabilising… hold still.");
+      }
       break;
     case "lost":
       setStatus("Document lost — searching…");
@@ -396,89 +694,157 @@ function updateStatusText(tr: TrackingResult): void {
 }
 
 async function captureAndFlatten(): Promise<void> {
-  if (!tracker?.isCaptureReady() || !lastWebcamQuad) {
-    setStatus("Hold the document steady until the outline turns bright green.");
+  if (!canUseShutter()) {
+    setStatus("Point the camera at a document within the frame.");
     return;
   }
 
+  const fallbackQuad = lastWebcamQuad!;
+  captureBtn.disabled = true;
   setStatus("Capturing…");
 
   try {
-    captureResult = await detectAtPreviewResolution(video, video.videoWidth, video.videoHeight);
-    captureSrcWidth = video.videoWidth;
-    captureSrcHeight = video.videoHeight;
-    const quad = captureResult.quad ?? lastWebcamQuad;
+    const still = freezeFrame(video, video.videoWidth, video.videoHeight);
+    captureSrcWidth = still.width;
+    captureSrcHeight = still.height;
+
+    setStatus("Refining corners…");
+    captureResult = await detectAtCaptureResolution(still, captureSrcWidth, captureSrcHeight);
+    const quad = captureResult.quad ?? fallbackQuad;
     if (!quad) {
       setStatus("No document edges found — try repositioning and capture again.");
       return;
     }
-    renderCaptureDebug();
-    await warpAndShow(video, video.videoWidth, video.videoHeight, quad);
+    openEditor(still, captureSrcWidth, captureSrcHeight, quad);
     renderDebugInfo();
   } catch {
     setStatus("Detection failed — try again.");
+  } finally {
+    captureBtn.disabled = !canUseShutter();
   }
 }
 
-async function warpAndShow(
-  source: CanvasImageSource,
-  srcWidth: number,
-  srcHeight: number,
-  quad: Quad,
-): Promise<void> {
+function freezeFrame(source: CanvasImageSource, width: number, height: number): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
-  canvas.width = srcWidth;
-  canvas.height = srcHeight;
-  const ctx = canvas.getContext("2d")!;
-  ctx.drawImage(source, 0, 0, srcWidth, srcHeight);
-  const imageData = ctx.getImageData(0, 0, srcWidth, srcHeight);
-  const warped = warpRgba(imageData.data, srcWidth, srcHeight, quad, {
-    minOutputWidth: EXPORT_MIN_DOCUMENT_WIDTH,
+  canvas.width = width;
+  canvas.height = height;
+  canvas.getContext("2d")!.drawImage(source, 0, 0, width, height);
+  return canvas;
+}
+
+function createCornerEditor(still: HTMLCanvasElement, width: number, height: number, quad: Quad): void {
+  const pad = 16;
+  const maxW = Math.max(1, editorBodyEl.clientWidth - pad);
+  const maxH = Math.max(1, editorBodyEl.clientHeight - pad);
+  editor?.destroy();
+  editor = new CornerEditor({
+    canvas: editorCanvas,
+    source: still,
+    sourceWidth: width,
+    sourceHeight: height,
+    quad,
+    maxDisplayWidth: maxW,
+    maxDisplayHeight: maxH,
   });
-  showWarpedResult(warped.data, warped.width, warped.height);
+}
+
+function openEditor(still: HTMLCanvasElement, width: number, height: number, quad: Quad): void {
+  editorStill = { canvas: still, width, height };
+  if (activeMode === "webcam") pauseLiveLoop();
+
+  openModal(editorModal);
+  requestAnimationFrame(() => {
+    createCornerEditor(still, width, height, quad);
+  });
+}
+
+function closeEditor(): void {
+  editor?.destroy();
+  editor = null;
+  editorStill = null;
+  closeModal(editorModal);
+  activeMode = "webcam";
+  if (mediaStream) resumeLiveLoop();
+  else void maybeAutoStartCamera();
+}
+
+function flattenFromEditor(): void {
+  if (!editor || !editorStill) return;
+  const quad = editor.getQuad();
+  const { canvas, width, height } = editorStill;
+  const srcData = canvas.getContext("2d")!.getImageData(0, 0, width, height).data;
+
+  const nativeWarp = warpRgba(srcData, width, height, quad, {});
+  const exportWarp = warpRgba(srcData, width, height, quad, { minOutputWidth: EXPORT_MIN_DOCUMENT_WIDTH });
+
+  lastWarpRaw = exportWarp;
+  lastQuality = analyzeQualityRgba(nativeWarp.data, nativeWarp.width, nativeWarp.height, quad);
+
+  editor.destroy();
+  editor = null;
+  editorStill = null;
+  closeModal(editorModal);
+  activeMode = "webcam";
+  renderResult();
+}
+
+function renderResult(): void {
+  if (!lastWarpRaw) return;
+  const { data, width, height } = lastWarpRaw;
+  const finalData = enhanceToggle.checked ? enhanceAutoContrast(data, width, height) : data;
+  showWarpedResult(finalData, width, height);
+  renderQuality(lastQuality);
+  renderDebugInfo();
+}
+
+function renderQuality(quality: DocumentQualityResult | null): void {
+  if (!quality) {
+    qualityGradeEl.textContent = "";
+    qualityGradeEl.className = "quality-grade";
+    qualityRecsEl.replaceChildren();
+    return;
+  }
+  qualityGradeEl.textContent = `${quality.qualityGrade.toUpperCase()} · ${quality.overallScore}/100`;
+  qualityGradeEl.className = `quality-grade grade-${quality.qualityGrade}`;
+  const items = quality.recommendations.length ? quality.recommendations : ["Looks good — no issues detected."];
+  qualityRecsEl.replaceChildren(
+    ...items.map((text) => {
+      const li = document.createElement("li");
+      li.textContent = text;
+      return li;
+    }),
+  );
 }
 
 function showWarpedResult(data: Uint8ClampedArray, width: number, height: number): void {
   resultCanvas.width = width;
   resultCanvas.height = height;
   resultCanvas.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(data), width, height), 0, 0);
-  resultPanel.classList.remove("hidden");
   downloadLink.href = resultCanvas.toDataURL("image/png");
   downloadLink.download = `scanned-document-${width}x${height}.png`;
   lastFlattenedSize = { width, height };
+  openModal(resultModal);
 }
 
-/** Re-renders the selected debug layers from the most recent capture onto the debug canvas. */
-function renderCaptureDebug(): void {
-  if (!captureResult?.debug || debugCanvas.width === 0) {
-    debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
-    return;
-  }
-  renderDebugLayers(
-    debugCtx,
-    debugCanvas.width,
-    debugCanvas.height,
-    captureSrcWidth,
-    captureResult.debug,
-    captureResult.quad,
-    activeLayers,
-  );
+function closeResultModal(): void {
+  closeModal(resultModal);
+  if (mediaStream) resumeLiveLoop();
+  else void maybeAutoStartCamera();
 }
 
 async function handleFileSelected(): Promise<void> {
   const file = fileInput.files?.[0];
   if (!file) return;
 
+  activeMode = "upload";
   const image = await loadImageFile(file);
-  lastUploadImage = image;
   const previewScale = Math.min(1, UPLOAD_PREVIEW_MAX_WIDTH / image.width);
-  lastUploadPreviewScale = previewScale;
 
   setStatus("Detecting document…");
   renderUploadPreview(image, previewScale, null);
 
   try {
-    captureResult = await detectAtPreviewResolution(image, image.width, image.height);
+    captureResult = await detectAtCaptureResolution(image, image.width, image.height);
     captureSrcWidth = image.width;
     captureSrcHeight = image.height;
     renderUploadPreview(image, previewScale, captureResult);
@@ -486,16 +852,17 @@ async function handleFileSelected(): Promise<void> {
 
     const quad = captureResult.quad;
     if (!quad) {
-      setStatus("No fused document edges found — see CV/ML quads in preview.");
-      resultPanel.classList.add("hidden");
+      setStatus("No document edges found — try another image.");
+      activeMode = "webcam";
       return;
     }
-    const conf = captureResult.confidence ? ` (fused ${captureResult.confidence.value.toFixed(2)})` : "";
-    const detector = captureResult.detector ?? "cv";
-    setStatus(`Document detected via ${detector}${conf}.`);
-    await warpAndShow(image, image.width, image.height, quad);
+    const conf = captureResult.confidence ? ` (confidence ${captureResult.confidence.value.toFixed(2)})` : "";
+    setStatus(`Document detected${conf}.`);
+    const still = freezeFrame(image, image.width, image.height);
+    openEditor(still, image.width, image.height, quad);
   } catch {
     setStatus("Detection failed for this image.");
+    activeMode = "webcam";
   }
 }
 
@@ -508,7 +875,6 @@ function loadImageFile(file: File): Promise<HTMLImageElement> {
   });
 }
 
-/** Builds the debug-panel rows from camera / upload settings plus detection diagnostics. */
 function renderDebugInfo(): void {
   const rows: [string, string][] = [
     ["ML detector", detectionWorker.isMlAvailable ? "ready" : "unavailable"],
@@ -530,18 +896,12 @@ function renderDebugInfo(): void {
       ["Facing mode", settings.facingMode ?? "unknown"],
       ["Live detect size", `${liveDetectCanvas.width} × ${liveDetectCanvas.height} (max ${PREVIEW_DETECT_MAX_DIM}px)`],
       ["Live FPS", fps ? fps.toFixed(0) : "—"],
-      ["Detection cadence", detectionWorker.isMlAvailable ? "every frame (ML)" : `every ${LIVE_DETECT_INTERVAL_CV} frames (CV)`],
+      ["Detection cadence", detectionWorker.isMlAvailable ? "every frame (ML)" : "ML unavailable"],
       ["Detection thread", "web worker"],
       ["Worker status", detectionWorker.isLiveBusy ? "busy" : "idle"],
-      ["Live detector", liveResult?.detector ?? "—"],
-      ["Live detect mode", liveResult?.mode ?? "full"],
     );
 
     appendResultRows(rows, "Live", liveResult);
-    if (liveResult?.sources) {
-      appendParallelSourceRows(rows, "Live CV", liveResult.sources.cv);
-      appendParallelSourceRows(rows, "Live ML", liveResult.sources.ml);
-    }
 
     if (trackingResult) {
       const tr = trackingResult;
@@ -559,14 +919,7 @@ function renderDebugInfo(): void {
       ["Upload detect size", `${liveDetectCanvas.width} × ${liveDetectCanvas.height} (max ${PREVIEW_DETECT_MAX_DIM}px)`],
       ["Upload preview size", `${uploadCanvas.width} × ${uploadCanvas.height}`],
     );
-  }
-
-  if (captureResult && (activeMode === "upload" || captureResult.debug)) {
-    const uploadLabel = activeMode === "upload" ? "Upload" : "Capture";
-    rows.push([`${uploadLabel} detector`, captureResult.detector ?? "—"]);
-    appendResultRows(rows, uploadLabel, captureResult);
-    appendParallelSourceRows(rows, `${uploadLabel} CV`, captureResult.sources?.cv ?? null);
-    appendParallelSourceRows(rows, `${uploadLabel} ML`, captureResult.sources?.ml ?? null);
+    appendResultRows(rows, "Upload", captureResult);
   }
 
   if (lastFlattenedSize) {
@@ -589,18 +942,10 @@ function renderDebugInfo(): void {
   );
 }
 
-/** Appends a result's timing, confidence, and per-component scores to the debug rows. */
 function appendResultRows(rows: [string, string][], label: string, result: DetectionResult | null): void {
   if (!result) return;
   rows.push([`${label} detect time`, `${sumTimings(result)} ms`]);
   rows.push([`${label} confidence`, result.confidence ? result.confidence.value.toFixed(2) : "—"]);
-  const c = result.components;
-  if (c) {
-    rows.push(["  edge / textDens", `${c.edge.toFixed(2)} / ${c.textDensity.toFixed(2)}`]);
-    rows.push(["  area / aspect", `${c.area.toFixed(2)} / ${c.aspectRatio.toFixed(2)}`]);
-    rows.push(["  interior / border", `${c.interiorConsistency.toFixed(2)} / ${c.borderMargin.toFixed(2)}`]);
-    rows.push(["  envelope / total", `${c.envelopeSupport.toFixed(2)} / ${c.total.toFixed(2)}`]);
-  }
   rows.push([`${label} stages (ms)`, stageString(result)]);
 }
 
@@ -614,63 +959,14 @@ function stageString(result: DetectionResult): string {
     .join(", ");
 }
 
-function formatQuadCorners(quad: Quad | null): string {
-  if (!quad) return "none";
-  const [tl, tr, br, bl] = quad;
-  const p = (pt: { x: number; y: number }) => `${Math.round(pt.x)},${Math.round(pt.y)}`;
-  return `TL ${p(tl)} · TR ${p(tr)} · BR ${p(br)} · BL ${p(bl)}`;
-}
-
-function sumSourceTimings(timings: StageTimings): number {
-  return Math.round(Object.values(timings).reduce((a, b) => a + b, 0));
-}
-
-function appendParallelSourceRows(
-  rows: [string, string][],
-  label: string,
-  source: DetectionSourceSummary | null,
-): void {
-  if (!source) {
-    rows.push([`${label} quad`, "unavailable"]);
-    return;
-  }
-  rows.push([`${label} quad`, formatQuadCorners(source.quad)]);
-  rows.push([`${label} confidence`, source.confidence !== null ? source.confidence.toFixed(2) : "—"]);
-  rows.push([`${label} time`, `${sumSourceTimings(source.timings)} ms`]);
-  if (source.components) {
-    rows.push([`${label} score`, source.components.total.toFixed(2)]);
-  }
-}
-
-/** Builds the capture-mode debug layer toggles. */
 function buildLayerToggles(): void {
-  debugLayersEl.replaceChildren(
-    ...DEBUG_LAYERS.map(({ id, label }) => {
-      const wrapper = document.createElement("label");
-      const input = document.createElement("input");
-      input.type = "checkbox";
-      input.checked = activeLayers.has(id);
-      input.addEventListener("change", () => {
-        if (input.checked) activeLayers.add(id);
-        else activeLayers.delete(id);
-        renderCaptureDebug();
-      });
-      const span = document.createElement("span");
-      span.textContent = label;
-      wrapper.append(input, span);
-      return wrapper;
-    }),
-    ...buildLiveLayerToggles(),
-  );
+  debugLayersEl.replaceChildren(...buildLiveLayerToggles());
 }
 
-/** Returns toggle elements for the live overlay layers (raw detected quad, velocity arrows). */
 function buildLiveLayerToggles(): HTMLLabelElement[] {
-  const liveLayerDefs: { id: "rawDetected" | "velocity" | "cvSource" | "mlSource"; label: string }[] = [
-    { id: "cvSource", label: "CV quad (cyan)" },
-    { id: "mlSource", label: "ML quad (magenta)" },
-    { id: "rawDetected", label: "Fused quad (yellow)" },
-    { id: "velocity", label: "Corner velocity vectors (webcam)" },
+  const liveLayerDefs: { id: "rawDetected" | "velocity"; label: string }[] = [
+    { id: "rawDetected", label: "Raw detected quad (yellow)" },
+    { id: "velocity", label: "Corner velocity vectors" },
   ];
   return liveLayerDefs.map(({ id, label }) => {
     const wrapper = document.createElement("label");
@@ -680,9 +976,6 @@ function buildLiveLayerToggles(): HTMLLabelElement[] {
     input.addEventListener("change", () => {
       if (input.checked) liveOverlayLayers.add(id);
       else liveOverlayLayers.delete(id);
-      if (activeMode === "upload" && lastUploadImage) {
-        renderUploadPreview(lastUploadImage, lastUploadPreviewScale, captureResult);
-      }
     });
     const span = document.createElement("span");
     span.textContent = label;
@@ -691,19 +984,39 @@ function buildLiveLayerToggles(): HTMLLabelElement[] {
   });
 }
 
-modeWebcamBtn.addEventListener("click", () => setMode("webcam"));
-modeUploadBtn.addEventListener("click", () => setMode("upload"));
 captureBtn.addEventListener("click", () => void captureAndFlatten());
+cameraPermitBtn.addEventListener("click", () => void startWebcam());
+cameraPermissionGalleryBtn.addEventListener("click", () => openGalleryPicker());
+galleryBtn.addEventListener("click", () => openGalleryPicker());
 fileInput.addEventListener("change", () => void handleFileSelected());
+flattenBtn.addEventListener("click", () => flattenFromEditor());
+editorBackBtn.addEventListener("click", () => closeEditor());
+enhanceToggle.addEventListener("change", () => renderResult());
+debugOpenBtn.addEventListener("click", () => {
+  renderDebugInfo();
+  openModal(debugModal);
+});
+debugCloseBtn.addEventListener("click", () => closeModal(debugModal));
+resultDoneBtn.addEventListener("click", () => closeResultModal());
+resultDoneBtnFooter.addEventListener("click", () => closeResultModal());
+
+window.addEventListener("resize", () => syncOverlaySize());
+window.addEventListener("orientationchange", () => {
+  requestAnimationFrame(() => syncOverlaySize());
+});
 
 async function init(): Promise<void> {
-  setStatus("Loading detectors…");
+  setStatus("Loading detector…");
   detectionWorker = new ParallelDetectionClient();
   await detectionWorker.whenReady();
-  const mlStatus = detectionWorker.isMlAvailable ? "ML detector ready" : "ML detector unavailable (CV only)";
-  setStatus(`${mlStatus}. OpenCV loads only if CV fallback is needed.`);
+  const httpsHint = window.isSecureContext ? "" : " Use the https:// link on your phone.";
+  setStatus(
+    detectionWorker.isMlAvailable
+      ? `Tap Allow camera to start scanning.${httpsHint}`
+      : `ML detector unavailable — you can still choose from gallery.${httpsHint}`,
+  );
   buildLayerToggles();
-  setMode("webcam");
+  await maybeAutoStartCamera();
 }
 
 void init();

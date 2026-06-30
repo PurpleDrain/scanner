@@ -12,12 +12,12 @@
     "bench": "vitest bench"
   },
   "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
     "typescript": "~6.0.2",
     "vite": "^8.1.0",
     "vitest": "^4.1.9"
   },
   "dependencies": {
-    "@techstark/opencv-js": "^5.0.0-release.1",
     "onnxruntime-web": "^1.27.0"
   }
 }

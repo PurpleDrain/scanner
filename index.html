@@ -4,60 +4,128 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>Document Scanner PoC</title>
+    <title>Document Scanner</title>
   </head>
   <body>
     <div id="app">
-      <header>
-        <h1>Document Scanner PoC</h1>
-        <p>Detects a document's edges and outlines them live, using OpenCV.js.</p>
-      </header>
-
-      <div class="mode-toggle">
-        <button id="mode-webcam" class="active" type="button">Webcam</button>
-        <button id="mode-upload" type="button">Upload Image</button>
-      </div>
-
-      <div class="scanner-layout">
-        <div class="scanner-main">
-          <section id="webcam-panel" class="panel">
-            <div class="stage">
-              <video id="video" autoplay muted playsinline></video>
-              <canvas id="overlay-canvas"></canvas>
-              <canvas id="debug-canvas"></canvas>
-              <div class="stage-ui">
-                <p id="status" class="stage-status" aria-live="polite">Loading OpenCV.js&hellip;</p>
-                <button id="capture-btn" class="capture-btn" type="button" disabled>
-                  Capture
-                </button>
-              </div>
-            </div>
-          </section>
-
-          <section id="upload-panel" class="panel hidden">
-            <p id="upload-status" class="upload-status" aria-live="polite"></p>
-            <input id="file-input" type="file" accept="image/*" />
-            <div class="stage">
-              <canvas id="upload-canvas"></canvas>
-            </div>
-          </section>
+      <section id="webcam-panel" class="camera-shell">
+        <div class="camera-viewport">
+          <video id="video" autoplay muted playsinline></video>
+          <canvas id="overlay-canvas"></canvas>
         </div>
 
-        <aside class="debug-panel">
-          <h3>Debug Info</h3>
-          <dl id="debug-list"></dl>
-          <h3>Debug Layers</h3>
-          <p class="debug-hint">Webcam: toggle overlays. Upload: CV/ML/fused quads on preview.</p>
-          <div id="debug-layers" class="debug-layers"></div>
-        </aside>
-      </div>
+        <div id="camera-permission" class="camera-permission">
+          <div class="camera-permission-card">
+            <h2>Camera access</h2>
+            <p id="camera-permission-text">Allow camera access to scan documents live.</p>
+            <button id="camera-permit-btn" class="primary-btn" type="button">Allow camera</button>
+            <button id="camera-permission-gallery-btn" class="secondary-btn" type="button">
+              Choose from gallery
+            </button>
+          </div>
+        </div>
 
-      <section id="result-panel" class="hidden">
-        <h2>Flattened Result</h2>
-        <canvas id="result-canvas"></canvas>
-        <a id="download-link" download="scanned-document.png">Download PNG</a>
+        <div class="camera-chrome">
+          <header class="camera-top">
+            <p id="status" class="stage-status" aria-live="polite">Loading detector&hellip;</p>
+            <button id="debug-open-btn" class="icon-btn" type="button" aria-label="Debug info">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+              </svg>
+            </button>
+          </header>
+
+          <div id="precapture-hints" class="precapture-hints" aria-live="polite"></div>
+
+          <footer class="camera-bottom">
+            <button id="gallery-btn" class="icon-btn gallery-btn" type="button" aria-label="Choose from gallery">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none" />
+                <path d="M21 15l-5-5L5 21" />
+              </svg>
+            </button>
+            <button id="capture-btn" class="shutter-btn" type="button" disabled aria-label="Capture document">
+              <span class="shutter-inner"></span>
+            </button>
+            <div class="camera-bottom-spacer" aria-hidden="true"></div>
+          </footer>
+        </div>
+      </section>
+
+      <!-- Hidden upload helpers (no visible upload panel on mobile) -->
+      <section id="upload-panel" class="hidden" aria-hidden="true">
+        <p id="upload-status" class="upload-status" aria-live="polite"></p>
+        <input id="file-input" type="file" accept="image/*" hidden />
+        <canvas id="upload-canvas"></canvas>
       </section>
     </div>
+
+    <dialog id="debug-modal" class="app-modal">
+      <div class="modal-header">
+        <h2>Debug</h2>
+        <button id="debug-close-btn" class="icon-btn modal-close" type="button" aria-label="Close debug">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body modal-body-scroll">
+        <h3>Info</h3>
+        <dl id="debug-list"></dl>
+        <h3>Overlay layers</h3>
+        <p class="debug-hint">Toggle the detected-quad and velocity overlays.</p>
+        <div id="debug-layers" class="debug-layers"></div>
+      </div>
+    </dialog>
+
+    <dialog id="editor-modal" class="app-modal app-modal-full">
+      <div class="modal-header">
+        <h2>Adjust corners</h2>
+        <button id="editor-back" class="icon-btn modal-close" type="button" aria-label="Cancel">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      <p class="editor-hint">Drag the corners to match the document edges.</p>
+      <div id="editor-body" class="modal-body editor-body">
+        <canvas id="editor-canvas"></canvas>
+      </div>
+      <footer class="modal-footer">
+        <button id="flatten-btn" class="primary-btn" type="button">Flatten</button>
+      </footer>
+    </dialog>
+
+    <dialog id="result-modal" class="app-modal app-modal-full">
+      <div class="modal-header">
+        <h2>Scan result</h2>
+        <button id="result-done-btn" class="icon-btn modal-close" type="button" aria-label="Done">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body result-body">
+        <div class="quality-summary">
+          <span id="quality-grade" class="quality-grade"></span>
+          <label class="enhance-toggle">
+            <input id="enhance-toggle" type="checkbox" checked />
+            Enhance
+          </label>
+        </div>
+        <ul id="quality-recommendations" class="quality-recommendations"></ul>
+        <div class="result-canvas-wrap">
+          <canvas id="result-canvas"></canvas>
+        </div>
+      </div>
+      <footer class="modal-footer result-footer">
+        <a id="download-link" class="secondary-btn download-btn" download="scanned-document.png">Download PNG</a>
+        <button id="result-done-btn-footer" class="primary-btn" type="button">Done</button>
+      </footer>
+    </dialog>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

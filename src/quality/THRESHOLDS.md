@@ -12,17 +12,17 @@ about Japanese document text density — not values fit to a labeled corpus of
 real Japanese medical document photos and their actual OCR/VLM success rates.
 Treat them as a reasonable starting point, not ground truth. All of them are
 passed as plain config objects (`QualityConfig`), so they can be overridden
-per call to `analyzeDocumentQuality()` without touching this code.
+per call to `analyzeQualityRgba()` without touching this code.
 
 ## Blur (`BlurThresholds`)
 
 Measured as the variance of the Laplacian of the grayscale image
-(`computeBlurMetric`): a sharp image has high-frequency edge content, so the
+(`computeBlurMetricRgba`): a sharp image has high-frequency edge content, so the
 second derivative has high variance; a blurred image's edges are smoothed
 out, lowering it. This is a long-standing, well-known no-reference blur
-proxy (commonly cited threshold for "is this photo blurry" is ~100, e.g. in
-OpenCV community tutorials) and was chosen specifically because it requires
-no model and runs in a couple of `cv` calls.
+proxy (commonly cited threshold for "is this photo blurry" is ~100) and was
+chosen specifically because it requires no model and runs in a single pass over
+the pixel buffer.
 
 | Threshold | Value | Rationale |
 |---|---|---|
@@ -142,7 +142,7 @@ yes/no" or VLM extraction accuracy per image):
 2. Plot raw metric vs. outcome to find the actual transition points between
    "reliably succeeds" and "reliably fails" for each metric independently.
 3. Update the corresponding threshold values in `DEFAULT_QUALITY_CONFIG`
-   (or pass a custom `QualityConfig` to `analyzeDocumentQuality()` without
+   (or pass a custom `QualityConfig` to `analyzeQualityRgba()` without
    touching the defaults, if recalibrating per deployment/customer).
 4. Re-run `npm test` — the unit tests assert relative/monotonic behavior
    (e.g. "higher variance scores higher") rather than hardcoding these exact

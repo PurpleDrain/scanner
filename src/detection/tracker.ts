@@ -54,6 +54,24 @@ export interface TrackerOptions {
   maxBadDetectionCycles?: number;
   /** Stability score (0..1) at or above which `isCaptureReady()` returns true. */
   captureReadyStability?: number;
+  /** EMA blend per tick toward the target stability (higher = faster capture-ready). */
+  stabilityBlend?: number;
+  /** Corner velocity (px) at which stability from stillness reaches zero. */
+  velocityStabilityScale?: number;
+  /** Floor applied to stability when entering the tracking state. */
+  trackingEntryStability?: number;
+  /** Stability score at/above which low-motion smoothing is tightened (stable lock). */
+  stableSmoothingThreshold?: number;
+  /** Smoothing alpha when stable and motion is below the large-change threshold. */
+  alphaWhenStable?: number;
+  /** Mean corner motion (px) that counts as a deliberate large change. */
+  largeChangeMotionThreshold?: number;
+  /** Smoothing alpha when motion exceeds `largeChangeMotionThreshold` (lower = snappier). */
+  alphaOnLargeChange?: number;
+  /** Multiplier on `motionThreshold` while stable — ignores more small jitter. */
+  stableMotionThresholdScale?: number;
+  /** Stability multiplier applied when a large change is accepted (must re-stabilize). */
+  largeChangeStabilityPenalty?: number;
 }
 
 const DEFAULTS: Required<TrackerOptions> = {
@@ -70,6 +88,15 @@ const DEFAULTS: Required<TrackerOptions> = {
   ticksBetweenDetections: 10,
   maxBadDetectionCycles: 2,
   captureReadyStability: 0.75,
+  stabilityBlend: 0.07,
+  velocityStabilityScale: 15,
+  trackingEntryStability: 0,
+  stableSmoothingThreshold: 0.55,
+  alphaWhenStable: 0.92,
+  largeChangeMotionThreshold: 80,
+  alphaOnLargeChange: 0.18,
+  stableMotionThresholdScale: 1.5,
+  largeChangeStabilityPenalty: 0.55,
 };
 
 /**
@@ -199,6 +226,9 @@ export class DocumentTracker {
       this.consecutiveBadCycles = 0;
       if (this.consecutiveGoodCycles >= this.opts.framesForTracking) {
         this._state = "tracking";
+        if (this.opts.trackingEntryStability > 0) {
+          this._stabilityScore = Math.max(this._stabilityScore, this.opts.trackingEntryStability);
+        }
       }
     } else {
       this.consecutiveBadCycles++;
@@ -214,6 +244,10 @@ export class DocumentTracker {
       const stabilityBonus = Math.max(0, 1 - this._cornerVelocity / 40);
       const target = detConf * 0.6 + stabilityBonus * 0.4;
       this._trackingConfidence = this._trackingConfidence * 0.85 + Math.max(0, Math.min(1, target)) * 0.15;
+    } else if (candidate && this._isLargeChange(candidate)) {
+      // Deliberate move — follow quickly even if a single corner fails the strict jump check.
+      this._smooth(candidate);
+      this._trackingConfidence = Math.max(this._trackingConfidence * 0.85, 0.5);
     } else {
       // Detection failed or quad jumped — penalise confidence.
       this._trackingConfidence *= 0.7;
@@ -278,10 +312,26 @@ export class DocumentTracker {
     }
 
     const motion = meanDist(newQuad, this._smoothedQuad);
-    const t = Math.min(1, motion / this.opts.motionThreshold);
-    // t=0 (low motion) → use alphaAtLowMotion (high smoothing, stable)
-    // t=1 (high motion) → use alphaAtHighMotion (low smoothing, responsive)
-    const alpha = this.opts.alphaAtLowMotion * (1 - t) + this.opts.alphaAtHighMotion * t;
+    const stable =
+      this._state === "tracking" && this._stabilityScore >= this.opts.stableSmoothingThreshold;
+
+    let lowAlpha = this.opts.alphaAtLowMotion;
+    let highAlpha = this.opts.alphaAtHighMotion;
+    let motionThreshold = this.opts.motionThreshold;
+
+    if (stable) {
+      lowAlpha = this.opts.alphaWhenStable;
+      motionThreshold *= this.opts.stableMotionThresholdScale;
+    }
+
+    let alpha: number;
+    if (motion >= this.opts.largeChangeMotionThreshold) {
+      alpha = this.opts.alphaOnLargeChange;
+      this._stabilityScore *= this.opts.largeChangeStabilityPenalty;
+    } else {
+      const t = Math.min(1, motion / motionThreshold);
+      alpha = lowAlpha * (1 - t) + highAlpha * t;
+    }
 
     this._smoothedQuad = this._smoothedQuad.map((prev, i) => ({
       x: prev.x * alpha + newQuad[i].x * (1 - alpha),
@@ -292,20 +342,31 @@ export class DocumentTracker {
   // ---------------------------------------------------------------------------
   // Sanity checks
 
+  private _isLargeChange(newQuad: Quad): boolean {
+    if (!this._smoothedQuad) return false;
+    return meanDist(newQuad, this._smoothedQuad) >= this.opts.largeChangeMotionThreshold;
+  }
+
+  private _isAreaRatioSane(newQuad: Quad): boolean {
+    if (!this._smoothedQuad) return true;
+    const newArea = polygonArea(newQuad);
+    const oldArea = polygonArea(this._smoothedQuad);
+    if (oldArea <= 0) return true;
+    const ratio = newArea / oldArea;
+    return ratio <= this.opts.maxAreaRatioChange && ratio >= 1 / this.opts.maxAreaRatioChange;
+  }
+
   private _isSane(newQuad: Quad): boolean {
     if (!isConvex(newQuad)) return false;
     if (!this._smoothedQuad) return true;
 
-    if (maxDist(newQuad, this._smoothedQuad) > this.opts.maxCornerJump) return false;
-
-    const newArea = polygonArea(newQuad);
-    const oldArea = polygonArea(this._smoothedQuad);
-    if (oldArea > 0) {
-      const ratio = newArea / oldArea;
-      if (ratio > this.opts.maxAreaRatioChange || ratio < 1 / this.opts.maxAreaRatioChange) return false;
+    if (this._isLargeChange(newQuad)) {
+      return this._isAreaRatioSane(newQuad);
     }
 
-    return true;
+    if (maxDist(newQuad, this._smoothedQuad) > this.opts.maxCornerJump) return false;
+
+    return this._isAreaRatioSane(newQuad);
   }
 
   private _isNearLast(candidate: Quad): boolean {
@@ -344,9 +405,14 @@ export class DocumentTracker {
       this._stabilityScore *= 0.92;
       return;
     }
-    const velocityFactor = Math.max(0, 1 - this._cornerVelocity / 15);
+    const velocityFactor = Math.max(0, 1 - this._cornerVelocity / this.opts.velocityStabilityScale);
     const target = velocityFactor * 0.6 + this._trackingConfidence * 0.4;
-    this._stabilityScore = this._stabilityScore * 0.93 + Math.max(0, Math.min(1, target)) * 0.07;
+    let blend = this.opts.stabilityBlend;
+    // Once stable, resist small dips from ML jitter so capture-ready does not flicker.
+    if (this._stabilityScore >= this.opts.stableSmoothingThreshold && target < this._stabilityScore) {
+      blend *= 0.35;
+    }
+    this._stabilityScore = this._stabilityScore * (1 - blend) + Math.max(0, Math.min(1, target)) * blend;
   }
 
   // ---------------------------------------------------------------------------

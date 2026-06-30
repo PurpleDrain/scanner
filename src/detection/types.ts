@@ -1,10 +1,7 @@
 /**
- * Shared types for the document-detection pipeline.
- *
- * The pipeline is split into four stages so that future ML components can replace any one of
- * them behind a stable interface: feature extraction (→ {@link FeatureMaps}), candidate
- * generation (→ {@link Candidate}), candidate scoring (→ {@link ScoredCandidate}), and
- * perspective correction (consumes the final {@link Quad}).
+ * Shared types for the document-detection pipeline. Detection is performed by the
+ * ML model (DocAligner) in a worker; these types describe its serializable output
+ * and the tracked {@link Quad} consumed by perspective correction.
  */
 
 export interface Point {
@@ -58,47 +55,10 @@ export interface Confidence {
   geometricPlausibility: number;
 }
 
-/**
- * Per-pixel feature maps at one processing scale. Typed arrays are row-major, length width*height.
- * Heavy fields (text density, shadow, Lab channels) are only populated in "full" detection mode.
- */
-export interface FeatureMaps {
-  width: number;
-  height: number;
-  scale: number; // featureMapSize / srcSize — multiply feature coords by 1/scale to map back to src
-
-  // Color-aware combined gradient (chroma-weighted across L, a, b).
-  magnitude: Float32Array;
-  direction: Float32Array; // radians, atan2(gy, gx) of the dominant-channel gradient
-  maxMagnitude: number;
-
-  // Per-channel gradient magnitudes (debug + multi-channel inspection).
-  magnitudeL: Float32Array;
-  magnitudeA: Float32Array;
-  magnitudeB: Float32Array;
-
-  // Text-density and shadow (low-frequency page outline).
-  textDensity?: Float32Array; // 0..1 local text likelihood
-  shadow?: Float32Array; // low-frequency (shadow) edge response
-  shadowMax?: number;
-  labL?: Float32Array; // retained Lab channels for interior-consistency scoring
-  labA?: Float32Array;
-  labB?: Float32Array;
-}
-
 export type DetectionMode = "preview" | "full";
 
 export interface StageTimings {
   [stage: string]: number; // milliseconds
-}
-
-/** Diagnostic data emitted when detection is run with `debug: true` (capture mode only). */
-export interface DetectionDebug {
-  featureMaps: FeatureMaps;
-  lines: Line[];
-  candidates: ScoredCandidate[]; // top-N, best first
-  accumulatorStats: { peak: number; peakCount: number; thetaBins: number; rhoBins: number };
-  accumulatorHeatmap?: { width: number; height: number; data: Float32Array };
 }
 
 export interface DetectionResult {
@@ -109,27 +69,6 @@ export interface DetectionResult {
   scale: number; // processing scale that produced the winner
   mode: DetectionMode;
   timings: StageTimings;
-  debug?: DetectionDebug;
-  /** Present when CV and ML ran in parallel; indicates which path won fusion. */
-  detector?: "cv" | "ml";
-  /** Raw CV / ML outputs before fusion (debug). */
-  sources?: DetectionParallelSources;
-}
-
-/** Per-path detection snapshot for parallel CV+ML debug. */
-export interface DetectionSourceSummary {
-  quad: Quad | null;
-  confidence: number | null;
-  timings: StageTimings;
-  components?: ScoreComponents | null;
-}
-
-export interface DetectionParallelSources {
-  cv: DetectionSourceSummary;
-  ml: DetectionSourceSummary | null;
-}
-
-export interface DetectOptions {
-  mode?: DetectionMode; // "preview" (fast, single scale) | "full" (multi-scale + interior scoring)
-  debug?: boolean; // build DetectionDebug buffers (full mode)
+  /** Which path produced the final quad. */
+  detector?: "ml";
 }

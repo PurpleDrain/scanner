@@ -182,6 +182,26 @@ describe("DocumentTracker — smoothing", () => {
 
     expect(highDelta).toBeGreaterThan(lowDelta);
   });
+
+  it("smooths small jitter more once stability is high", () => {
+    const tracker = new DocumentTracker({
+      framesForTracking: 2,
+      stableSmoothingThreshold: 0.4,
+      alphaWhenStable: 0.95,
+      alphaAtLowMotion: 0.7,
+      largeChangeMotionThreshold: 200,
+      captureReadyStability: 0.5,
+      stabilityBlend: 0.2,
+    });
+    tracker.update(makeResult(DOC, 0.9));
+    tracker.update(makeResult(DOC, 0.9));
+    for (let i = 0; i < 25; i++) tracker.update(makeResult(DOC, 0.9));
+    expect(tracker.update(makeResult(DOC, 0.9)).stabilityScore).toBeGreaterThanOrEqual(0.4);
+
+    const jitter = makeQuad(58, 40, 200, 280);
+    const r = tracker.update(makeResult(jitter, 0.9));
+    expect(r.quad![0].x).toBeLessThan(55);
+  });
 });
 
 describe("DocumentTracker — geometric sanity", () => {
@@ -203,16 +223,36 @@ describe("DocumentTracker — geometric sanity", () => {
     expect(r.trackingConfidence).toBeLessThan(0.9);
   });
 
-  it("rejects a quad that jumps more than maxCornerJump", () => {
-    const tracker = new DocumentTracker({ framesForTracking: 2, maxCornerJump: 30 });
+  it("rejects a moderate jump that exceeds maxCornerJump but is not a large deliberate move", () => {
+    const tracker = new DocumentTracker({
+      framesForTracking: 2,
+      maxCornerJump: 30,
+      largeChangeMotionThreshold: 80,
+    });
     tracker.update(makeResult(DOC, 0.9));
     tracker.update(makeResult(DOC, 0.9));
 
-    const farAway = makeQuad(500, 500, 200, 280);
-    tracker.update(makeResult(farAway, 0.9));
-    // Confidence should decrease (sanity check rejected the jump)
-    const r = tracker.update(makeResult(farAway, 0.9));
+    const mediumJump = makeQuad(120, 40, 200, 280);
+    tracker.update(makeResult(mediumJump, 0.9));
+    const r = tracker.update(makeResult(mediumJump, 0.9));
     expect(r.trackingConfidence).toBeLessThan(0.8);
+  });
+
+  it("follows a deliberate large reposition quickly", () => {
+    const tracker = new DocumentTracker({
+      framesForTracking: 2,
+      maxCornerJump: 30,
+      largeChangeMotionThreshold: 80,
+      alphaOnLargeChange: 0.15,
+    });
+    tracker.update(makeResult(DOC, 0.9));
+    tracker.update(makeResult(DOC, 0.9));
+    for (let i = 0; i < 20; i++) tracker.update(makeResult(DOC, 0.9));
+
+    const farAway = makeQuad(500, 500, 200, 280);
+    const r = tracker.update(makeResult(farAway, 0.9));
+    expect(r.trackingConfidence).toBeGreaterThanOrEqual(0.5);
+    expect(r.quad![0].x).toBeGreaterThan(300);
   });
 });
 

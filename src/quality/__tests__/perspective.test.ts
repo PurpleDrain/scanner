@@ -2,8 +2,17 @@ import { describe, expect, it } from "vitest";
 import { computeEdgeMetrics } from "../metrics/perspective";
 import { scorePerspective } from "../scoring/perspective";
 import { DEFAULT_QUALITY_CONFIG } from "../config";
-import { axisAlignedQuad } from "./testUtils";
 import type { Quad } from "../../documentScanner";
+
+/** Axis-aligned rectangle in TL, TR, BR, BL order. */
+function axisAlignedQuad(width: number, height: number): Quad {
+  return [
+    { x: 0, y: 0 },
+    { x: width, y: 0 },
+    { x: width, y: height },
+    { x: 0, y: height },
+  ];
+}
 
 describe("computeEdgeMetrics", () => {
   it("reports zero deviation and perfect symmetry for an axis-aligned rectangle", () => {

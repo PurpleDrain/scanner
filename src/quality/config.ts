@@ -78,6 +78,8 @@ export interface GradeThresholds {
 export interface GuidanceConfig {
   /** A metric's score below this (0-100) is considered "weak" enough to warrant a recommendation. */
   weakScoreThreshold: number;
+  /** Min share of the camera frame covered by the document; below → move-closer hint. */
+  minFrameFill: number;
 }
 
 export interface QualityConfig {
@@ -137,5 +139,6 @@ export const DEFAULT_QUALITY_CONFIG: QualityConfig = {
   },
   guidance: {
     weakScoreThreshold: 70,
+    minFrameFill: 0.12,
   },
 };

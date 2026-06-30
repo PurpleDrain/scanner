@@ -8,27 +8,24 @@ similar to apps like CamScanner or Apple Notes' built-in scanner.
 ## Stack
 
 - **TypeScript + Vite** for the app shell.
-- **[OpenCV.js](https://docs.opencv.org/4.x/d5/d10/tutorial_js_root.html)**
-  (via [`@techstark/opencv-js`](https://www.npmjs.com/package/@techstark/opencv-js),
-  an npm-packaged build with TypeScript types) for the actual computer vision.
+- **[onnxruntime-web](https://onnxruntime.ai/)** running the
+  [DocAligner LCNet100](https://github.com/DocsaidLab/DocAligner) corner-detection
+  model on-device for document detection (in a web worker).
+- **WebGL** for perspective flattening, and **Canvas2D / pure JS** for the quality
+  metrics and auto-contrast enhancement. No OpenCV.
 
 ## How detection works
 
-See `src/documentScanner.ts`:
+See `src/detection/DETECTION.md` for the full pipeline. In short:
 
-1. Convert the frame to grayscale and blur it (`GaussianBlur`) to suppress noise.
-2. Run Canny edge detection, then dilate the edges slightly to close small gaps.
-3. Find all contours (`findContours`) and, sorted by area, look for the
-   largest one that approximates to a convex 4-point polygon
-   (`approxPolyDP` + `isContourConvex`) covering at least 10% of the frame.
-4. Order the 4 points as top-left/top-right/bottom-right/bottom-left.
-5. Draw that quadrilateral as the live outline overlay.
-6. On capture, run `getPerspectiveTransform` + `warpPerspective` to map the
-   quad onto an upright rectangle sized to its measured width/height.
-
-This is the standard approach used by most real scanner apps (e.g. the OSS
-[jscanify](https://github.com/puffinsoft/jscanify) library wraps the same
-OpenCV building blocks).
+1. The webcam frame / uploaded image is downscaled to ≤480 px and sent to the ML worker.
+2. The DocAligner model predicts the four document corners, post-processed into an
+   ordered quad (top-left/top-right/bottom-right/bottom-left) plus a confidence.
+3. The quad is scaled back to source coordinates and (for the webcam) smoothed by a
+   temporal tracker, then drawn as the live outline overlay.
+4. After capture or upload, you can drag the corners in the editor, then flatten:
+   a WebGL homography warp maps the quad onto an upright rectangle, the result is
+   quality-scored, and auto-contrast enhancement is applied before download.
 
 ## Running it
 
@@ -44,10 +41,8 @@ outline and the resulting flattened crop, which can be downloaded as a PNG.
 
 ## Known PoC limitations
 
-- Detection is a classical edge/contour heuristic, not a learned model — it
-  works best against a reasonably contrasting background and can miss edges
-  in low contrast, cluttered, or curled-page scenes.
-- No multi-page batching, OCR, or image enhancement (contrast/binarization)
-  of the final crop — out of scope for this PoC.
-- The live webcam loop processes a downscaled frame for performance; the
-  full-resolution frame is only re-analyzed at capture time.
+- Detection relies entirely on the ML model; if it fails to load (unsupported
+  browser, fetch error) there is no classical fallback.
+- No multi-page batching or OCR — out of scope for this PoC.
+- Both the live loop and capture/upload detect on a downscaled (≤480 px) frame
+  for speed; the full-resolution frame is only used for the final flatten/export.
