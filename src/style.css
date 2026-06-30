@@ -11,9 +11,14 @@
   box-sizing: border-box;
 }
 
+html {
+  touch-action: manipulation;
+}
+
 body {
   margin: 0;
   overflow: hidden;
+  touch-action: manipulation;
 }
 
 .hidden {
@@ -25,6 +30,7 @@ body {
   inset: 0;
   display: flex;
   flex-direction: column;
+  touch-action: manipulation;
 }
 
 /* ── Fullscreen camera shell ─────────────────────────────────────────── */
@@ -263,6 +269,57 @@ body {
 }
 
 /* ── Modals ──────────────────────────────────────────────────────────── */
+
+.processing-dialog {
+  margin: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #f3f4f6;
+  overflow: visible;
+}
+
+.processing-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.processing-dialog:not([open]) {
+  display: none !important;
+}
+
+.processing-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+  min-width: 10rem;
+  padding: 1.25rem 1.5rem;
+  border-radius: 14px;
+  background: rgba(17, 19, 23, 0.92);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+.processing-message {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.spinner {
+  width: 2rem;
+  height: 2rem;
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spinner-rotate 0.75s linear infinite;
+}
+
+@keyframes spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 .app-modal {
   margin: 0;

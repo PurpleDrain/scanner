@@ -4,13 +4,90 @@ function distance(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-/** Output dimensions for a perspective-flattened quad (matches OpenCV warp sizing). */
-export function warpOutputSize(quad: Quad, minOutputWidth = 0): { width: number; height: number } {
+/**
+ * Recovers the true width/height aspect ratio of a rectangle from its perspective
+ * projection (the detected quad), using a pinhole-camera model with the principal
+ * point at the image centre and an unknown focal length (Zhang & He, 2007).
+ *
+ * Returns width/height, or null when the geometry is degenerate (caller should
+ * fall back to the visible edge-length ratio).
+ */
+export function recoverAspectRatio(quad: Quad, imageWidth: number, imageHeight: number): number | null {
+  if (imageWidth <= 0 || imageHeight <= 0) return null;
+
+  const u0 = imageWidth / 2;
+  const v0 = imageHeight / 2;
+
+  // m1=top-left, m2=top-right, m3=bottom-left, m4=bottom-right, relative to the principal point.
+  const [tl, tr, br, bl] = quad;
+  const m1x = tl.x - u0;
+  const m1y = tl.y - v0;
+  const m2x = tr.x - u0;
+  const m2y = tr.y - v0;
+  const m3x = bl.x - u0;
+  const m3y = bl.y - v0;
+  const m4x = br.x - u0;
+  const m4y = br.y - v0;
+
+  const k2Den = (m2y - m4y) * m3x - (m2x - m4x) * m3y + m2x * m4y - m2y * m4x;
+  const k3Den = (m3y - m4y) * m2x - (m3x - m4x) * m2y + m3x * m4y - m3y * m4x;
+  if (Math.abs(k2Den) < 1e-9 || Math.abs(k3Den) < 1e-9) return null;
+
+  const k2 = ((m1y - m4y) * m3x - (m1x - m4x) * m3y + m1x * m4y - m1y * m4x) / k2Den;
+  const k3 = ((m1y - m4y) * m2x - (m1x - m4x) * m2y + m1x * m4y - m1y * m4x) / k3Den;
+
+  // Near-affine (camera roughly parallel to the page): ratio is the Euclidean edge ratio.
+  if (Math.abs(k2 - 1) < 1e-6 && Math.abs(k3 - 1) < 1e-6) {
+    const topLen = Math.hypot(m2x - m1x, m2y - m1y);
+    const leftLen = Math.hypot(m3x - m1x, m3y - m1y);
+    if (leftLen < 1e-9) return null;
+    return topLen / leftLen;
+  }
+
+  const fSquaredDen = (k3 - 1) * (k2 - 1);
+  if (Math.abs(fSquaredDen) < 1e-9) return null;
+
+  const fSquared =
+    -((k3 * m3y - m1y) * (k2 * m2y - m1y) + (k3 * m3x - m1x) * (k2 * m2x - m1x)) / fSquaredDen;
+  if (!Number.isFinite(fSquared) || fSquared <= 0) return null;
+
+  const num =
+    (k2 - 1) ** 2 +
+    (k2 * m2y - m1y) ** 2 / fSquared +
+    (k2 * m2x - m1x) ** 2 / fSquared;
+  const den =
+    (k3 - 1) ** 2 +
+    (k3 * m3y - m1y) ** 2 / fSquared +
+    (k3 * m3x - m1x) ** 2 / fSquared;
+  if (den < 1e-12) return null;
+
+  const ratio = Math.sqrt(num / den);
+  if (!Number.isFinite(ratio) || ratio <= 0) return null;
+  return ratio;
+}
+
+/**
+ * Output dimensions for a perspective-flattened quad.
+ *
+ * When `imageSize` is supplied, the aspect ratio is recovered from the perspective
+ * projection so angled captures are not squished; otherwise the visible edge
+ * lengths are used directly.
+ */
+export function warpOutputSize(
+  quad: Quad,
+  minOutputWidth = 0,
+  imageSize?: { width: number; height: number },
+): { width: number; height: number } {
   const [topLeft, topRight, bottomRight, bottomLeft] = quad;
-  let width = Math.round(Math.max(distance(topLeft, topRight), distance(bottomLeft, bottomRight)));
-  let height = Math.round(Math.max(distance(topLeft, bottomLeft), distance(topRight, bottomRight)));
-  width = Math.max(1, width);
-  height = Math.max(1, height);
+  let width = Math.max(1, Math.round(Math.max(distance(topLeft, topRight), distance(bottomLeft, bottomRight))));
+  let height = Math.max(1, Math.round(Math.max(distance(topLeft, bottomLeft), distance(topRight, bottomRight))));
+
+  if (imageSize) {
+    const ratio = recoverAspectRatio(quad, imageSize.width, imageSize.height);
+    if (ratio) {
+      height = Math.max(1, Math.round(width / ratio));
+    }
+  }
 
   if (minOutputWidth > 0 && width < minOutputWidth) {
     const scale = minOutputWidth / width;

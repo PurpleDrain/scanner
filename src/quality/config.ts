@@ -95,10 +95,10 @@ export interface QualityConfig {
 
 export const DEFAULT_QUALITY_CONFIG: QualityConfig = {
   blur: {
-    excellentVariance: 800,
-    goodVariance: 400,
-    acceptableVariance: 200,
-    poorVariance: 80,
+    excellentVariance: 500,
+    goodVariance: 250,
+    acceptableVariance: 120,
+    poorVariance: 40,
   },
   brightness: {
     underexposedMean: 90,

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
+import type { Quad } from "../../../documentScanner";
 import { DEFAULT_QUALITY_CONFIG } from "../../config";
-import { computeBlurMetricRgba, computeBrightnessMetricRgba, computeGlareMetricRgba } from "../metrics";
+import { scoreBlur } from "../../scoring/blur";
+import {
+  computeBlurMetricRgba,
+  computeBlurMetricRgbaSourceRegion,
+  computeBrightnessMetricRgba,
+  computeGlareMetricRgba,
+} from "../metrics";
 
 function solid(width: number, height: number, r: number, g: number, b: number): Uint8ClampedArray {
   const data = new Uint8ClampedArray(width * height * 4);
@@ -57,6 +64,40 @@ describe("computeBlurMetricRgba", () => {
     const sharpVar = computeBlurMetricRgba(sharp, 16, 16).blurVariance;
     const blurredVar = computeBlurMetricRgba(blurred, 16, 16).blurVariance;
     expect(sharpVar).toBeGreaterThan(blurredVar);
+  });
+
+  it("normalizes variance so checkerboard detail scores similarly at different widths", () => {
+    const at64 = build(64, 64, (x, y) => {
+      const v = (x + y) % 2 === 0 ? 0 : 255;
+      return [v, v, v];
+    });
+    const at128 = build(128, 128, (x, y) => {
+      const v = (x + y) % 2 === 0 ? 0 : 255;
+      return [v, v, v];
+    });
+    const v64 = computeBlurMetricRgba(at64, 64, 64).blurVariance;
+    const v128 = computeBlurMetricRgba(at128, 128, 128).blurVariance;
+    expect(v64).toBeGreaterThan(0);
+    expect(v128 / v64).toBeGreaterThan(0.2);
+    expect(v128 / v64).toBeLessThan(4);
+  });
+
+  it("scores a sharp text-like source region as not blurry", () => {
+    const w = 1200;
+    const h = 1600;
+    const data = build(w, h, (x) => {
+      const v = Math.floor(x / 6) % 2 === 0 ? 235 : 25;
+      return [v, v, v];
+    });
+    const quad: Quad = [
+      { x: 0, y: 0 },
+      { x: w, y: 0 },
+      { x: w, y: h },
+      { x: 0, y: h },
+    ];
+    const metric = computeBlurMetricRgbaSourceRegion(data, w, h, quad);
+    const result = scoreBlur(metric, DEFAULT_QUALITY_CONFIG.blur);
+    expect(result.blurScore).toBeGreaterThanOrEqual(DEFAULT_QUALITY_CONFIG.guidance.weakScoreThreshold);
   });
 });
 

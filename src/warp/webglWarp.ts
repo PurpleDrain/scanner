@@ -117,7 +117,10 @@ export function warpRgba(
   quad: Quad,
   options: WarpRgbaOptions = {},
 ): WarpRgbaResult {
-  const { width, height } = warpOutputSize(quad, options.minOutputWidth ?? 0);
+  const { width, height } = warpOutputSize(quad, options.minOutputWidth ?? 0, {
+    width: srcWidth,
+    height: srcHeight,
+  });
   const dstCorners = dstCornersForSize(width, height);
   const h = toGlMat3(homographyDstToSrc(dstCorners, quad));
 

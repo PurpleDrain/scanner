@@ -1,5 +1,12 @@
+import type { Quad } from "../../documentScanner";
 import type { GlareThresholds } from "../config";
 import type { BlurMetric, BrightnessMetric, GlareMetric } from "../types";
+
+/**
+ * Reference document width for resolution-normalized blur scoring — matches
+ * `resolution.excellentWidthPx` so thresholds stay comparable across warp sizes.
+ */
+export const BLUR_REFERENCE_WIDTH = 2400;
 
 /**
  * Pure-JS reimplementations of the OpenCV quality metrics, operating directly
@@ -15,6 +22,54 @@ const OVEREXPOSED_PIXEL_VALUE = 245;
 
 function luma(r: number, g: number, b: number): number {
   return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
+/** Scale Laplacian variance as if the image were `BLUR_REFERENCE_WIDTH` wide. */
+export function normalizeBlurVariance(variance: number, width: number): number {
+  const w = Math.max(1, width);
+  const scale = BLUR_REFERENCE_WIDTH / w;
+  return variance * scale * scale;
+}
+
+function cropRgba(
+  data: Uint8ClampedArray,
+  imageWidth: number,
+  x0: number,
+  y0: number,
+  cropWidth: number,
+  cropHeight: number,
+): Uint8ClampedArray {
+  const crop = new Uint8ClampedArray(cropWidth * cropHeight * 4);
+  for (let y = 0; y < cropHeight; y++) {
+    const srcStart = ((y0 + y) * imageWidth + x0) * 4;
+    crop.set(data.subarray(srcStart, srcStart + cropWidth * 4), y * cropWidth * 4);
+  }
+  return crop;
+}
+
+/**
+ * Laplacian variance on the axis-aligned document region in the original photo.
+ * Avoids penalizing sharp captures for softness introduced by perspective warp
+ * interpolation and normalizes for how large the document is in the frame.
+ */
+export function computeBlurMetricRgbaSourceRegion(
+  data: Uint8ClampedArray,
+  imageWidth: number,
+  imageHeight: number,
+  quad: Quad,
+): BlurMetric {
+  const xs = quad.map((p) => p.x);
+  const ys = quad.map((p) => p.y);
+  const x0 = Math.max(0, Math.floor(Math.min(...xs)));
+  const y0 = Math.max(0, Math.floor(Math.min(...ys)));
+  const x1 = Math.min(imageWidth, Math.ceil(Math.max(...xs)));
+  const y1 = Math.min(imageHeight, Math.ceil(Math.max(...ys)));
+  const cropWidth = x1 - x0;
+  const cropHeight = y1 - y0;
+  if (cropWidth < 3 || cropHeight < 3) return { blurVariance: 0 };
+
+  const crop = cropRgba(data, imageWidth, x0, y0, cropWidth, cropHeight);
+  return computeBlurMetricRgba(crop, cropWidth, cropHeight);
 }
 
 /** Variance of a 3x3 Laplacian over the luma plane (interior pixels). Higher = sharper. */
@@ -42,7 +97,7 @@ export function computeBlurMetricRgba(data: Uint8ClampedArray, width: number, he
 
   const mean = sum / count;
   const variance = sumSq / count - mean * mean;
-  return { blurVariance: Math.max(0, variance) };
+  return { blurVariance: normalizeBlurVariance(Math.max(0, variance), width) };
 }
 
 /** Mean luma plus the fraction of pixels clipped near black/white. */

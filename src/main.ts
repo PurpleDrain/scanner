@@ -12,7 +12,7 @@ import { analyzeQualityRgba } from "./quality/rgba/analyzeQualityRgba";
 import { precaptureGuidance } from "./quality/rgba/precaptureGuidance";
 import type { DocumentQualityResult } from "./quality/types";
 import { CornerEditor } from "./ui/cornerEditor";
-import { enhanceAutoContrast } from "./enhance/autoContrast";
+import { enhanceForOcr } from "./enhance/ocrEnhance";
 
 const statusEl = document.querySelector<HTMLParagraphElement>("#status")!;
 const uploadStatusEl = document.querySelector<HTMLParagraphElement>("#upload-status")!;
@@ -45,6 +45,10 @@ const precaptureHintsEl = document.querySelector<HTMLDivElement>("#precapture-hi
 const qualityGradeEl = document.querySelector<HTMLSpanElement>("#quality-grade")!;
 const qualityRecsEl = document.querySelector<HTMLUListElement>("#quality-recommendations")!;
 const enhanceToggle = document.querySelector<HTMLInputElement>("#enhance-toggle")!;
+const processingDialog = document.querySelector<HTMLDialogElement>("#processing-dialog")!;
+const processingMessageEl = document.querySelector<HTMLParagraphElement>("#processing-message")!;
+
+let processingDepth = 0;
 
 const overlayCtx = overlayCanvas.getContext("2d")!;
 const uploadCtx = uploadCanvas.getContext("2d")!;
@@ -176,6 +180,32 @@ function setStatus(message: string): void {
     uploadStatusEl.textContent = message;
   }
   statusEl.textContent = message;
+}
+
+function beginProcessing(message: string): void {
+  processingDepth++;
+  processingMessageEl.textContent = message;
+  setStatus(message);
+  if (!processingDialog.open) processingDialog.showModal();
+}
+
+function updateProcessingMessage(message: string): void {
+  processingMessageEl.textContent = message;
+  setStatus(message);
+}
+
+function endProcessing(): void {
+  processingDepth = Math.max(0, processingDepth - 1);
+  if (processingDepth === 0 && processingDialog.open) {
+    processingDialog.close();
+  }
+}
+
+/** Yield so the processing spinner can paint before heavy synchronous work. */
+function yieldToUi(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
 }
 
 function videoCoverTransform(el: HTMLVideoElement): CoverTransform {
@@ -701,14 +731,14 @@ async function captureAndFlatten(): Promise<void> {
 
   const fallbackQuad = lastWebcamQuad!;
   captureBtn.disabled = true;
-  setStatus("Capturing…");
+  beginProcessing("Capturing…");
 
   try {
     const still = freezeFrame(video, video.videoWidth, video.videoHeight);
     captureSrcWidth = still.width;
     captureSrcHeight = still.height;
 
-    setStatus("Refining corners…");
+    updateProcessingMessage("Refining corners…");
     captureResult = await detectAtCaptureResolution(still, captureSrcWidth, captureSrcHeight);
     const quad = captureResult.quad ?? fallbackQuad;
     if (!quad) {
@@ -720,6 +750,7 @@ async function captureAndFlatten(): Promise<void> {
   } catch {
     setStatus("Detection failed — try again.");
   } finally {
+    endProcessing();
     captureBtn.disabled = !canUseShutter();
   }
 }
@@ -769,29 +800,43 @@ function closeEditor(): void {
 }
 
 function flattenFromEditor(): void {
-  if (!editor || !editorStill) return;
-  const quad = editor.getQuad();
-  const { canvas, width, height } = editorStill;
-  const srcData = canvas.getContext("2d")!.getImageData(0, 0, width, height).data;
+  void (async () => {
+    if (!editor || !editorStill) return;
+    flattenBtn.disabled = true;
+    beginProcessing("Flattening…");
+    try {
+      await yieldToUi();
+      const quad = editor.getQuad();
+      const { canvas, width, height } = editorStill;
+      const srcData = canvas.getContext("2d")!.getImageData(0, 0, width, height).data;
 
-  const nativeWarp = warpRgba(srcData, width, height, quad, {});
-  const exportWarp = warpRgba(srcData, width, height, quad, { minOutputWidth: EXPORT_MIN_DOCUMENT_WIDTH });
+      const nativeWarp = warpRgba(srcData, width, height, quad, {});
+      const exportWarp = warpRgba(srcData, width, height, quad, { minOutputWidth: EXPORT_MIN_DOCUMENT_WIDTH });
 
-  lastWarpRaw = exportWarp;
-  lastQuality = analyzeQualityRgba(nativeWarp.data, nativeWarp.width, nativeWarp.height, quad);
+      lastWarpRaw = exportWarp;
+      lastQuality = analyzeQualityRgba(nativeWarp.data, nativeWarp.width, nativeWarp.height, quad, undefined, {
+        data: srcData,
+        width,
+        height,
+      });
 
-  editor.destroy();
-  editor = null;
-  editorStill = null;
-  closeModal(editorModal);
-  activeMode = "webcam";
-  renderResult();
+      editor.destroy();
+      editor = null;
+      editorStill = null;
+      closeModal(editorModal);
+      activeMode = "webcam";
+      renderResult();
+    } finally {
+      endProcessing();
+      flattenBtn.disabled = false;
+    }
+  })();
 }
 
 function renderResult(): void {
   if (!lastWarpRaw) return;
   const { data, width, height } = lastWarpRaw;
-  const finalData = enhanceToggle.checked ? enhanceAutoContrast(data, width, height) : data;
+  const finalData = enhanceToggle.checked ? enhanceForOcr(data, width, height) : data;
   showWarpedResult(finalData, width, height);
   renderQuality(lastQuality);
   renderDebugInfo();
@@ -837,13 +882,15 @@ async function handleFileSelected(): Promise<void> {
   if (!file) return;
 
   activeMode = "upload";
-  const image = await loadImageFile(file);
-  const previewScale = Math.min(1, UPLOAD_PREVIEW_MAX_WIDTH / image.width);
-
-  setStatus("Detecting document…");
-  renderUploadPreview(image, previewScale, null);
+  beginProcessing("Loading image…");
 
   try {
+    const image = await loadImageFile(file);
+    const previewScale = Math.min(1, UPLOAD_PREVIEW_MAX_WIDTH / image.width);
+
+    updateProcessingMessage("Detecting document…");
+    renderUploadPreview(image, previewScale, null);
+
     captureResult = await detectAtCaptureResolution(image, image.width, image.height);
     captureSrcWidth = image.width;
     captureSrcHeight = image.height;
@@ -863,6 +910,9 @@ async function handleFileSelected(): Promise<void> {
   } catch {
     setStatus("Detection failed for this image.");
     activeMode = "webcam";
+  } finally {
+    endProcessing();
+    fileInput.value = "";
   }
 }
 
@@ -1006,17 +1056,21 @@ window.addEventListener("orientationchange", () => {
 });
 
 async function init(): Promise<void> {
-  setStatus("Loading detector…");
-  detectionWorker = new ParallelDetectionClient();
-  await detectionWorker.whenReady();
-  const httpsHint = window.isSecureContext ? "" : " Use the https:// link on your phone.";
-  setStatus(
-    detectionWorker.isMlAvailable
-      ? `Tap Allow camera to start scanning.${httpsHint}`
-      : `ML detector unavailable — you can still choose from gallery.${httpsHint}`,
-  );
-  buildLayerToggles();
-  await maybeAutoStartCamera();
+  beginProcessing("Loading detector…");
+  try {
+    detectionWorker = new ParallelDetectionClient();
+    await detectionWorker.whenReady();
+    const httpsHint = window.isSecureContext ? "" : " Use the https:// link on your phone.";
+    setStatus(
+      detectionWorker.isMlAvailable
+        ? `Tap Allow camera to start scanning.${httpsHint}`
+        : `ML detector unavailable — you can still choose from gallery.${httpsHint}`,
+    );
+    buildLayerToggles();
+    await maybeAutoStartCamera();
+  } finally {
+    endProcessing();
+  }
 }
 
 void init();

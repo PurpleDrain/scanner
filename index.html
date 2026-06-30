@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Document Scanner</title>
   </head>
   <body>
@@ -112,7 +112,7 @@
           <span id="quality-grade" class="quality-grade"></span>
           <label class="enhance-toggle">
             <input id="enhance-toggle" type="checkbox" checked />
-            Enhance
+            Enhance for OCR
           </label>
         </div>
         <ul id="quality-recommendations" class="quality-recommendations"></ul>
@@ -124,6 +124,13 @@
         <a id="download-link" class="secondary-btn download-btn" download="scanned-document.png">Download PNG</a>
         <button id="result-done-btn-footer" class="primary-btn" type="button">Done</button>
       </footer>
+    </dialog>
+
+    <dialog id="processing-dialog" class="processing-dialog" aria-live="polite">
+      <div class="processing-content">
+        <div class="spinner" role="status" aria-label="Processing"></div>
+        <p id="processing-message" class="processing-message"></p>
+      </div>
     </dialog>
 
     <script type="module" src="/src/main.ts"></script>
