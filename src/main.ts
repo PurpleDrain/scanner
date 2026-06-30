@@ -30,6 +30,9 @@ const uploadCtx = uploadCanvas.getContext("2d")!;
 // Live preview detection runs on a downscaled offscreen frame for performance; the resulting
 // quad is rescaled back up to the overlay/full-res coordinate space.
 const PROCESSING_WIDTH = 480;
+// The full detection pipeline (all checks) runs live, but only every Nth animation frame to keep
+// the view responsive; the last outline stays drawn on the intervening frames.
+const DETECTION_FRAME_INTERVAL = 10;
 const processingCanvas = document.createElement("canvas");
 const processingCtx = processingCanvas.getContext("2d")!;
 
@@ -41,11 +44,12 @@ let currentVideoTrack: MediaStreamTrack | null = null;
 let lastFlattenedSize: { width: number; height: number } | null = null;
 
 // Detection diagnostics surfaced in the debug panel.
-let previewResult: DetectionResult | null = null;
+let liveResult: DetectionResult | null = null;
 let captureResult: DetectionResult | null = null;
 let captureSrcWidth = 0;
 let fps = 0;
 let lastTickTime = 0;
+let frameCounter = 0;
 const activeLayers = new Set<DebugLayer>(["selected"]);
 
 type Mode = "webcam" | "upload";
@@ -145,7 +149,7 @@ function stopWebcam(): void {
   mediaStream = null;
   lastWebcamQuad = null;
   currentVideoTrack = null;
-  previewResult = null;
+  liveResult = null;
   captureBtn.disabled = true;
   debugListEl.replaceChildren();
 }
@@ -153,30 +157,35 @@ function stopWebcam(): void {
 function runDetectionLoop(): void {
   const scaleX = overlayCanvas.width / processingCanvas.width;
   const scaleY = overlayCanvas.height / processingCanvas.height;
+  frameCounter = 0;
 
   const tick = () => {
     const now = performance.now();
     if (lastTickTime) fps = fps * 0.8 + (1000 / Math.max(1, now - lastTickTime)) * 0.2;
     lastTickTime = now;
 
-    processingCtx.drawImage(video, 0, 0, processingCanvas.width, processingCanvas.height);
-    const src = cv.imread(processingCanvas);
-    try {
-      // Fast single-scale detector for the live outline; the full pipeline runs at capture.
-      previewResult = detectDocument(cv, src, { mode: "preview" });
-      overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-      if (previewResult.quad) {
-        lastWebcamQuad = previewResult.quad.map((p) => ({ x: p.x * scaleX, y: p.y * scaleY })) as Quad;
-        drawQuadOutline(overlayCtx, lastWebcamQuad);
-        statusEl.textContent = "Document detected — ready to capture.";
-      } else {
-        lastWebcamQuad = null;
-        statusEl.textContent = "Looking for a document… hold it flat within the frame.";
+    // Run the full pipeline (all checks) on a throttled cadence; between runs the loop just keeps
+    // the last outline on screen and refreshes the FPS reading.
+    if (frameCounter % DETECTION_FRAME_INTERVAL === 0) {
+      processingCtx.drawImage(video, 0, 0, processingCanvas.width, processingCanvas.height);
+      const src = cv.imread(processingCanvas);
+      try {
+        liveResult = detectDocument(cv, src, { mode: "full" });
+        overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+        if (liveResult.quad) {
+          lastWebcamQuad = liveResult.quad.map((p) => ({ x: p.x * scaleX, y: p.y * scaleY })) as Quad;
+          drawQuadOutline(overlayCtx, lastWebcamQuad);
+          statusEl.textContent = "Document detected — ready to capture.";
+        } else {
+          lastWebcamQuad = null;
+          statusEl.textContent = "Looking for a document… hold it flat within the frame.";
+        }
+      } finally {
+        src.delete();
       }
-    } finally {
-      src.delete();
+      renderDebugInfo();
     }
-    renderDebugInfo();
+    frameCounter++;
     detectionLoopHandle = requestAnimationFrame(tick);
   };
   detectionLoopHandle = requestAnimationFrame(tick);
@@ -295,25 +304,12 @@ function renderDebugInfo(): void {
     ["Frame rate", settings.frameRate ? `${settings.frameRate.toFixed(1)} fps` : "unknown"],
     ["Facing mode", settings.facingMode ?? "unknown"],
     ["Detection processing size", `${processingCanvas.width} × ${processingCanvas.height}`],
-    ["Preview FPS", fps ? fps.toFixed(0) : "—"],
+    ["Live FPS", fps ? fps.toFixed(0) : "—"],
+    ["Detection cadence", `every ${DETECTION_FRAME_INTERVAL} frames`],
   ];
 
-  if (previewResult) {
-    rows.push(["Preview detect time", `${sumTimings(previewResult)} ms`]);
-    rows.push(["Preview confidence", previewResult.confidence ? previewResult.confidence.value.toFixed(2) : "—"]);
-  }
-
-  if (captureResult) {
-    rows.push(["Capture detect time", `${sumTimings(captureResult)} ms`]);
-    rows.push(["Capture confidence", captureResult.confidence ? captureResult.confidence.value.toFixed(2) : "—"]);
-    const c = captureResult.components;
-    if (c) {
-      rows.push(["  edge / textDens", `${c.edge.toFixed(2)} / ${c.textDensity.toFixed(2)}`]);
-      rows.push(["  area / aspect", `${c.area.toFixed(2)} / ${c.aspectRatio.toFixed(2)}`]);
-      rows.push(["  interior / total", `${c.interiorConsistency.toFixed(2)} / ${c.total.toFixed(2)}`]);
-    }
-    rows.push(["Capture stages (ms)", stageString(captureResult)]);
-  }
+  appendResultRows(rows, "Live", liveResult);
+  appendResultRows(rows, "Capture", captureResult);
 
   if (lastFlattenedSize) {
     rows.push(["Last flattened size", `${lastFlattenedSize.width} × ${lastFlattenedSize.height}`]);
@@ -328,6 +324,20 @@ function renderDebugInfo(): void {
       return [dt, dd];
     }),
   );
+}
+
+/** Appends a result's timing, confidence, and per-component scores to the debug rows. */
+function appendResultRows(rows: [string, string][], label: string, result: DetectionResult | null): void {
+  if (!result) return;
+  rows.push([`${label} detect time`, `${sumTimings(result)} ms`]);
+  rows.push([`${label} confidence`, result.confidence ? result.confidence.value.toFixed(2) : "—"]);
+  const c = result.components;
+  if (c) {
+    rows.push(["  edge / textDens", `${c.edge.toFixed(2)} / ${c.textDensity.toFixed(2)}`]);
+    rows.push(["  area / aspect", `${c.area.toFixed(2)} / ${c.aspectRatio.toFixed(2)}`]);
+    rows.push(["  interior / total", `${c.interiorConsistency.toFixed(2)} / ${c.total.toFixed(2)}`]);
+  }
+  rows.push([`${label} stages (ms)`, stageString(result)]);
 }
 
 function sumTimings(result: DetectionResult): number {
