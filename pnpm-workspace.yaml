@@ -1,2 +1,5 @@
+packages:
+  - 'fe'
+
 allowBuilds:
   protobufjs: false

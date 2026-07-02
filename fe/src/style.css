@@ -1,0 +1,13 @@
+@import "tailwindcss";
+@import "./scanner.css";
+
+@theme {
+  --color-surface: #111317;
+  --color-surface-raised: #1c1f24;
+  --color-border: #3a3f47;
+  --color-muted: #9aa1ab;
+  --color-body: #e6e8eb;
+  --color-chrome: #cdd2da;
+  --color-green-capture: #22c55e;
+  --color-yellow-capture: #facc15;
+}

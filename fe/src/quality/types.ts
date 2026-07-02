@@ -1,17 +1,9 @@
-import type { Quad } from "../documentScanner";
-
 /** A 5-level severity scale reused by blur and the overall grade. */
 export type QualityLevel = "excellent" | "good" | "acceptable" | "poor" | "unusable";
 
 export type BrightnessStatus = "too_dark" | "good" | "too_bright";
 
 export type GlareSeverity = "none" | "minor" | "moderate" | "severe";
-
-/** Output of the document scanner's boundary detection, feeding the quality pipeline. */
-export interface DetectedDocument {
-  /** The four document corners in the *source* image's coordinate space. */
-  quad: Quad;
-}
 
 export interface BlurMetric {
   /** Raw variance-of-Laplacian value. Higher = sharper. Unbounded. */

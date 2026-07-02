@@ -186,19 +186,3 @@ function flipRowsInPlace(data: Uint8ClampedArray, width: number, height: number)
     data.set(scratch, bottom);
   }
 }
-
-/** @internal Reset cached WebGL state between tests. */
-export function resetWebGlWarpCache(): void {
-  if (gl) {
-    if (vbo) gl.deleteBuffer(vbo);
-    if (program) gl.deleteProgram(program);
-  }
-  glCanvas = null;
-  gl = null;
-  program = null;
-  vbo = null;
-  uDstToSrc = null;
-  uDstSize = null;
-  uTexSize = null;
-  uSource = null;
-}

@@ -1,7 +1,6 @@
 import type { Quad } from "./detection/types";
 
 export type { Point, Quad } from "./detection/types";
-export { orderCorners } from "./detection/geometry";
 
 /** Draws the quad outline and corner markers onto a 2D canvas context. */
 export function drawQuadOutline(

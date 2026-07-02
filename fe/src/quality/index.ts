@@ -17,7 +17,6 @@ export type {
   QualityLevel,
   BrightnessStatus,
   GlareSeverity,
-  DetectedDocument,
   BlurResult,
   BrightnessResult,
   GlareResult,

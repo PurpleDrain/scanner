@@ -1,23 +1,10 @@
 {
-  "name": "scanner",
+  "name": "scanner-monorepo",
   "private": true,
-  "version": "0.0.0",
-  "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "bench": "vitest bench"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-basic-ssl": "^2.3.0",
-    "typescript": "~6.0.2",
-    "vite": "^8.1.0",
-    "vitest": "^4.1.9"
-  },
-  "dependencies": {
-    "onnxruntime-web": "^1.27.0"
+    "dev": "pnpm --filter fe dev",
+    "be:dev": "cd be && go run github.com/air-verse/air@latest",
+    "build": "pnpm --filter fe build",
+    "test": "pnpm --filter fe test"
   }
 }

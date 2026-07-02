@@ -21,10 +21,6 @@ body {
   touch-action: manipulation;
 }
 
-.hidden {
-  display: none !important;
-}
-
 #app {
   position: fixed;
   inset: 0;
@@ -48,14 +44,14 @@ body {
   overflow: hidden;
 }
 
-#video {
+.camera-video {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
 }
 
-#overlay-canvas {
+.overlay-canvas {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -218,7 +214,7 @@ body {
   border-color: rgba(255, 255, 255, 0.55);
 }
 
-/* ── Camera permission gate (mobile requires user gesture) ───────────── */
+/* ── Camera permission gate ──────────────────────────────────────────── */
 
 .camera-permission {
   position: absolute;
@@ -227,15 +223,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1.5rem;
-  padding-top: max(1.5rem, env(safe-area-inset-top));
-  padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+  padding: max(1.5rem, env(safe-area-inset-top)) 1.5rem max(1.5rem, env(safe-area-inset-bottom));
   background: rgba(0, 0, 0, 0.88);
   pointer-events: auto;
-}
-
-.camera-permission.hidden {
-  display: none;
 }
 
 .camera-permission-card {
@@ -410,7 +400,7 @@ body {
   padding: 0.5rem 1rem;
 }
 
-#editor-canvas {
+.editor-canvas {
   display: block;
   max-width: 100%;
   max-height: 100%;
@@ -433,7 +423,7 @@ body {
   overflow: auto;
 }
 
-#result-canvas {
+.result-canvas {
   max-width: 100%;
   max-height: 100%;
   border-radius: 4px;
@@ -449,7 +439,7 @@ body {
   text-align: center;
 }
 
-/* ── Debug panel (inside modal) ──────────────────────────────────────── */
+/* ── Debug panel ─────────────────────────────────────────────────────── */
 
 .debug-hint {
   margin: 0 0 0.5rem;
@@ -457,7 +447,7 @@ body {
   color: #6b7280;
 }
 
-#debug-list {
+.debug-list {
   margin: 0;
   display: grid;
   grid-template-columns: auto 1fr;
@@ -465,11 +455,11 @@ body {
   font-size: 0.8rem;
 }
 
-#debug-list dt {
+.debug-list dt {
   color: #9aa1ab;
 }
 
-#debug-list dd {
+.debug-list dd {
   margin: 0;
   text-align: right;
   font-family: ui-monospace, monospace;
@@ -493,14 +483,6 @@ body {
 
 .debug-layers input {
   margin: 0;
-}
-
-.upload-status {
-  display: none;
-}
-
-#upload-canvas {
-  display: none;
 }
 
 /* ── Shared buttons ──────────────────────────────────────────────────── */
@@ -548,25 +530,27 @@ body {
   color: #e6e8eb;
 }
 
-.quality-grade.grade-excellent {
-  background: #14532d;
-  color: #86efac;
-}
+@layer components {
+  .grade-excellent {
+    background: #14532d;
+    color: #86efac;
+  }
 
-.quality-grade.grade-good {
-  background: #1e3a8a;
-  color: #93c5fd;
-}
+  .grade-good {
+    background: #1e3a8a;
+    color: #93c5fd;
+  }
 
-.quality-grade.grade-acceptable {
-  background: #78350f;
-  color: #fcd34d;
-}
+  .grade-acceptable {
+    background: #78350f;
+    color: #fcd34d;
+  }
 
-.quality-grade.grade-poor,
-.quality-grade.grade-unusable {
-  background: #7f1d1d;
-  color: #fca5a5;
+  .grade-poor,
+  .grade-unusable {
+    background: #7f1d1d;
+    color: #fca5a5;
+  }
 }
 
 .enhance-toggle {
