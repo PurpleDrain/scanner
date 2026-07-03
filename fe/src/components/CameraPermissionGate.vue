@@ -6,10 +6,10 @@ defineEmits<{ allow: []; gallery: [] }>();
 <template>
   <div class="camera-permission">
     <div class="camera-permission-card">
-      <h2>Camera access</h2>
+      <h2>カメラの使用について</h2>
       <p>{{ message }}</p>
-      <button class="primary-btn" type="button" @click="$emit('allow')">Allow camera</button>
-      <button class="secondary-btn" type="button" @click="$emit('gallery')">Choose from gallery</button>
+      <button class="primary-btn" type="button" @click="$emit('allow')">カメラを許可</button>
+      <button class="secondary-btn" type="button" @click="$emit('gallery')">ギャラリーから選択</button>
     </div>
   </div>
 </template>

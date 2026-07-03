@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { generateRecommendations, type QualityMetricResults } from "../recommendations";
+import {
+  generateRecommendations,
+  REC_BLURRY,
+  REC_GLARE,
+  REC_PERSPECTIVE,
+  REC_RESOLUTION,
+  REC_TOO_BRIGHT,
+  REC_TOO_DARK,
+  type QualityMetricResults,
+} from "../recommendations";
 import { DEFAULT_QUALITY_CONFIG } from "../config";
 
 const guidance = DEFAULT_QUALITY_CONFIG.guidance;
@@ -33,23 +42,21 @@ describe("generateRecommendations", () => {
     const metrics = buildMetrics({
       blur: { blurVariance: 10, blurScore: 20, blurSeverity: "unusable" },
     });
-    expect(generateRecommendations(metrics, guidance)).toContain("Image is blurry. Hold the phone steady.");
+    expect(generateRecommendations(metrics, guidance)).toContain(REC_BLURRY);
   });
 
   it("recommends more light when too dark", () => {
     const metrics = buildMetrics({
       brightness: { meanBrightness: 40, underexposedFraction: 0.5, overexposedFraction: 0, brightnessScore: 30, brightnessStatus: "too_dark" },
     });
-    expect(generateRecommendations(metrics, guidance)).toContain(
-      "The photo is too dark. Move to a brighter area or turn on more light.",
-    );
+    expect(generateRecommendations(metrics, guidance)).toContain(REC_TOO_DARK);
   });
 
   it("recommends moving from direct light when too bright", () => {
     const metrics = buildMetrics({
       brightness: { meanBrightness: 252, underexposedFraction: 0, overexposedFraction: 0.5, brightnessScore: 20, brightnessStatus: "too_bright" },
     });
-    expect(generateRecommendations(metrics, guidance)).toContain("The photo is overexposed. Move away from direct light.");
+    expect(generateRecommendations(metrics, guidance)).toContain(REC_TOO_BRIGHT);
   });
 
   it("recommends reducing glare for moderate and severe glare", () => {
@@ -59,15 +66,15 @@ describe("generateRecommendations", () => {
     const severe = buildMetrics({
       glare: { glareCoveragePercent: 40, glareScore: 5, glareSeverity: "severe" },
     });
-    expect(generateRecommendations(moderate, guidance)).toContain("Reduce glare on the page.");
-    expect(generateRecommendations(severe, guidance)).toContain("Reduce glare on the page.");
+    expect(generateRecommendations(moderate, guidance)).toContain(REC_GLARE);
+    expect(generateRecommendations(severe, guidance)).toContain(REC_GLARE);
   });
 
   it("does not recommend reducing glare for minor glare", () => {
     const metrics = buildMetrics({
       glare: { glareCoveragePercent: 3, glareScore: 70, glareSeverity: "minor" },
     });
-    expect(generateRecommendations(metrics, guidance)).not.toContain("Reduce glare on the page.");
+    expect(generateRecommendations(metrics, guidance)).not.toContain(REC_GLARE);
   });
 
   it("recommends holding the phone above the document when perspective is weak", () => {
@@ -83,13 +90,13 @@ describe("generateRecommendations", () => {
         perspectiveScore: 40,
       },
     });
-    expect(generateRecommendations(metrics, guidance)).toContain("Hold the phone more directly above the document.");
+    expect(generateRecommendations(metrics, guidance)).toContain(REC_PERSPECTIVE);
   });
 
   it("recommends moving the camera closer when resolution is weak", () => {
     const metrics = buildMetrics({
       resolution: { width: 600, height: 800, resolutionScore: 20 },
     });
-    expect(generateRecommendations(metrics, guidance)).toContain("Move the camera closer to the document.");
+    expect(generateRecommendations(metrics, guidance)).toContain(REC_RESOLUTION);
   });
 });

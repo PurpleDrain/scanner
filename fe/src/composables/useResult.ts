@@ -19,7 +19,7 @@ export function useResult() {
     quad: Quad,
     processing: { beginProcessing: (msg: string) => void; endProcessing: () => void },
   ): Promise<{ data: Uint8ClampedArray; width: number; height: number } | null> {
-    processing.beginProcessing("Flattening…");
+    processing.beginProcessing("画像を補正しています…");
     try {
       await yieldToUi();
       const { canvas, width, height } = still;

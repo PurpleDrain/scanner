@@ -17,6 +17,9 @@ const SOFT_CAPTURE_MIN_TRACKING_CONFIDENCE = 0.35;
 const SOFT_CAPTURE_MIN_DETECTION_CONFIDENCE = 0.45;
 const CAMERA_CONSENT_KEY = "scanner.cameraConsent.v1";
 
+const CAMERA_PERMISSION_PROMPT =
+  "書類をその場で読み取るために、カメラの使用をお願いしています。撮影した画像は読み取りのためだけに使われます。";
+
 interface CoverTransform {
   scale: number;
   offsetX: number;
@@ -36,12 +39,12 @@ export function useCameraSession(deps: {
   const liveDetectCanvas = document.createElement("canvas");
   const liveDetectCtx = liveDetectCanvas.getContext("2d")!;
 
-  const status = ref("Loading detector…");
+  const status = ref("読み取り機能を準備しています…");
   const hints = ref<string[]>([]);
   const captureEnabled = ref(false);
   const captureMode = ref<CaptureMode>("hold");
   const showPermission = ref(false);
-  const permissionMessage = ref("Allow camera access to scan documents live.");
+  const permissionMessage = ref(CAMERA_PERMISSION_PROMPT);
   const liveOverlayLayers = reactive({ rawDetected: true, velocity: false });
   const mediaStream = ref<MediaStream | null>(null);
   const currentVideoTrack = ref<MediaStreamTrack | null>(null);
@@ -120,50 +123,50 @@ export function useCameraSession(deps: {
 
   function cameraPrerequisiteMessage(): string | null {
     if (!window.isSecureContext) {
-      return "Camera requires HTTPS. On iPhone, open the https:// address from the dev server (not http://), accept the certificate warning, then tap Allow camera.";
+      return "カメラのご利用には HTTPS 接続が必要です。iPhone では https:// で始まるアドレスを開き、証明書の警告を承認してから「カメラを許可」を押してください。";
     }
     if (!navigator.mediaDevices?.getUserMedia) {
-      return "Camera is not available in this browser. Use Safari, or choose from gallery.";
+      return "お使いのブラウザではカメラをご利用いただけません。Safari をお使いいただくか、ギャラリーから画像をお選びください。";
     }
     return null;
   }
 
   function cameraErrorMessage(err: unknown): { card: string; status: string } {
     const prerequisite = cameraPrerequisiteMessage();
-    if (prerequisite) return { card: prerequisite, status: "Camera needs HTTPS." };
+    if (prerequisite) return { card: prerequisite, status: "カメラのご利用には HTTPS 接続が必要です。" };
     if (err instanceof Error && !(err instanceof DOMException)) {
-      return { card: err.message, status: "Could not access the camera." };
+      return { card: err.message, status: "カメラをご利用いただけませんでした。" };
     }
     if (err instanceof DOMException) {
       switch (err.name) {
         case "NotAllowedError":
         case "PermissionDeniedError":
           return {
-            card: "Camera access was denied. In Settings → Safari → Camera, allow access for this site, then tap Allow camera again.",
-            status: "Camera permission denied.",
+            card: "カメラの使用が許可されていません。設定 → Safari → カメラ からこのサイトを許可して、もう一度「カメラを許可」を押してください。",
+            status: "カメラの使用が許可されていません。",
           };
         case "NotFoundError":
-          return { card: "No camera found on this device. Choose from gallery instead.", status: "No camera found." };
+          return { card: "この端末ではカメラが見つかりませんでした。ギャラリーから画像をお選びください。", status: "カメラが見つかりませんでした。" };
         case "NotReadableError":
-          return { card: "Camera is in use by another app. Close it and try again.", status: "Camera is busy." };
+          return { card: "カメラが他のアプリで使用中のようです。そちらを閉じてから、もう一度お試しください。", status: "カメラが使用中です。" };
         case "SecurityError":
           return {
-            card: "Camera blocked — use the https:// URL (not http://) and accept the security certificate on your iPhone.",
-            status: "Camera blocked (insecure page).",
+            card: "カメラがブロックされています。https:// で始まるアドレスを開き、iPhone で証明書を承認してください。",
+            status: "カメラがブロックされています（安全でない接続）。",
           };
         case "OverconstrainedError":
           return {
-            card: "Could not open the camera with the requested settings. Try again or choose from gallery.",
-            status: "Camera constraints not supported.",
+            card: "この設定ではカメラを起動できませんでした。もう一度お試しいただくか、ギャラリーから画像をお選びください。",
+            status: "カメラの設定に対応していません。",
           };
         default:
           return {
-            card: `Could not access the camera (${err.name}). Try again or choose from gallery.`,
-            status: "Could not access the camera.",
+            card: `カメラをご利用いただけませんでした（${err.name}）。もう一度お試しいただくか、ギャラリーから画像をお選びください。`,
+            status: "カメラをご利用いただけませんでした。",
           };
       }
     }
-    return { card: "Could not access the camera. Try again or choose from gallery.", status: "Could not access the camera." };
+    return { card: "カメラをご利用いただけませんでした。もう一度お試しいただくか、ギャラリーから画像をお選びください。", status: "カメラをご利用いただけませんでした。" };
   }
 
   async function queryCameraPermission(): Promise<PermissionState | null> {
@@ -198,7 +201,7 @@ export function useCameraSession(deps: {
         }
       }
     }
-    throw lastError ?? new Error("Camera unavailable");
+    throw lastError ?? new Error("カメラをご利用いただけませんでした。");
   }
 
   async function maximizeTrackResolution(track: MediaStreamTrack): Promise<void> {
@@ -263,24 +266,24 @@ export function useCameraSession(deps: {
   function updateStatusText(tr: TrackingResult): void {
     switch (tr.state) {
       case "searching":
-        status.value = "Looking for a document… hold it flat within the frame.";
+        status.value = "書類を探しています… 枠の中に平らに収まるようにかざしてください。";
         break;
       case "detected":
         status.value = tr.detectionConfidence >= SOFT_CAPTURE_MIN_DETECTION_CONFIDENCE
-          ? "Document detected — tap to capture."
-          : "Document detected — aligning…";
+          ? "書類を確認できました。ボタンを押して撮影してください。"
+          : "書類を確認しています… 位置を合わせています。";
         break;
       case "tracking":
         if (tr.stabilityScore >= captureReadyStability) {
-          status.value = "Document locked — ready to capture.";
+          status.value = "準備が整いました。ボタンを押して撮影してください。";
         } else if (tr.trackingConfidence >= SOFT_CAPTURE_MIN_TRACKING_CONFIDENCE) {
-          status.value = "Document tracked — tap to capture.";
+          status.value = "書類を捉えています。ボタンを押して撮影できます。";
         } else {
-          status.value = "Document tracked — stabilising… hold still.";
+          status.value = "書類を捉えています… そのまま動かさずにお待ちください。";
         }
         break;
       case "lost":
-        status.value = "Document lost — searching…";
+        status.value = "書類を見失いました。もう一度探しています…";
         break;
     }
   }
@@ -407,7 +410,7 @@ export function useCameraSession(deps: {
     showPermission.value = false;
     storeCameraConsent();
     captureEnabled.value = false;
-    status.value = "Looking for a document… hold it flat within the frame.";
+    status.value = "書類を探しています… 枠の中に平らに収まるようにかざしてください。";
     runDetectionLoop();
     return true;
   }
@@ -468,18 +471,18 @@ export function useCameraSession(deps: {
       const started = await startWebcam({ silent: true });
       if (started) return;
       if (remembered) clearStoredCameraConsent();
-      permissionMessage.value = "Allow camera access to scan documents live.";
+      permissionMessage.value = CAMERA_PERMISSION_PROMPT;
       showPermission.value = true;
       return;
     }
     if (permission === "prompt") {
-      permissionMessage.value = "Allow camera access to scan documents live.";
+      permissionMessage.value = CAMERA_PERMISSION_PROMPT;
       showPermission.value = true;
       return;
     }
     const started = await startWebcam({ silent: true });
     if (!started) {
-      permissionMessage.value = "Allow camera access to scan documents live.";
+      permissionMessage.value = CAMERA_PERMISSION_PROMPT;
       showPermission.value = true;
     }
   }

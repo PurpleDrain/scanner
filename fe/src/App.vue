@@ -4,7 +4,9 @@ import CameraView from "./components/CameraView.vue";
 import DebugModal from "./components/DebugModal.vue";
 import CornerEditorModal from "./components/CornerEditorModal.vue";
 import ResultModal from "./components/ResultModal.vue";
+import ScanDataModal from "./components/ScanDataModal.vue";
 import ProcessingSpinner from "./components/ProcessingSpinner.vue";
+import { scanDocument, SCAN_FAILED_MESSAGE, type ScanAiResponse } from "./api/scanDocument";
 import { useProcessing } from "./composables/useProcessing";
 import { useDetectionWorker } from "./composables/useDetectionWorker";
 import { useCameraSession } from "./composables/useCameraSession";
@@ -20,6 +22,10 @@ const editorOpen = ref(false);
 const resultOpen = ref(false);
 const debugOpen = ref(false);
 const enhanceEnabled = ref(true);
+const scanDataOpen = ref(false);
+const scanData = ref<ScanAiResponse | null>(null);
+const submitting = ref(false);
+const submitError = ref<string | null>(null);
 
 // ── Component refs ───────────────────────────────────────────────────────────
 
@@ -171,7 +177,27 @@ function onEditorClose(): void {
 
 function onResultClose(): void {
   resultOpen.value = false;
+  scanDataOpen.value = false;
+  scanData.value = null;
+  submitError.value = null;
   if (!mediaStream.value) void camera.maybeAutoStartCamera();
+}
+
+async function onSubmitScan(blob: Blob): Promise<void> {
+  if (submitting.value) return;
+  submitError.value = null;
+  submitting.value = true;
+  beginProcessing("書類を読み取っています。しばらくお待ちください…");
+  try {
+    const res = await scanDocument(blob);
+    scanData.value = res.ai_response;
+    scanDataOpen.value = true;
+  } catch (err) {
+    submitError.value = err instanceof Error ? err.message : SCAN_FAILED_MESSAGE;
+  } finally {
+    endProcessing();
+    submitting.value = false;
+  }
 }
 
 function openGalleryPicker(): void {
@@ -228,13 +254,13 @@ onMounted(async () => {
   const overlay = cameraViewRef.value?.overlayEl;
   if (video && overlay) camera.setElements(video, overlay);
 
-  beginProcessing("Loading detector…");
+  beginProcessing("読み取り機能を準備しています…");
   try {
     await worker.init();
-    const httpsHint = window.isSecureContext ? "" : " Use the https:// link on your phone.";
+    const httpsHint = window.isSecureContext ? "" : " お使いのスマートフォンでは https:// のリンクをご利用ください。";
     cameraStatus.value = worker.isMlAvailable.value
-      ? `Tap Allow camera to start scanning.${httpsHint}`
-      : `ML detector unavailable — you can still choose from gallery.${httpsHint}`;
+      ? `「カメラを許可」を押すと、書類の読み取りを始められます。${httpsHint}`
+      : `自動検出機能をご利用いただけません。ギャラリーからの選択は可能です。${httpsHint}`;
     await camera.maybeAutoStartCamera();
   } finally {
     endProcessing();
@@ -280,9 +306,14 @@ onMounted(async () => {
     :open="resultOpen"
     :quality="lastQuality"
     :enhanced="enhanceEnabled"
+    :submitting="submitting"
+    :submit-error="submitError"
     @close="onResultClose"
     @update:enhanced="(v) => { enhanceEnabled = v; }"
+    @submit="onSubmitScan"
   />
+
+  <ScanDataModal :open="scanDataOpen" :data="scanData" @close="scanDataOpen = false" />
 
   <ProcessingSpinner :open="isProcessing" :message="processingMessage" />
 </template>

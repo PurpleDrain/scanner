@@ -32,8 +32,8 @@ function toggleLayer(key: "rawDetected" | "velocity", value: boolean) {
 <template>
   <dialog ref="dialogRef" class="app-modal">
     <div class="modal-header">
-      <h2>Debug</h2>
-      <button class="icon-btn modal-close" type="button" aria-label="Close debug" @click="$emit('close')">
+      <h2>デバッグ</h2>
+      <button class="icon-btn modal-close" type="button" aria-label="閉じる" @click="$emit('close')">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <path d="M18 6L6 18M6 6l12 12" />
         </svg>

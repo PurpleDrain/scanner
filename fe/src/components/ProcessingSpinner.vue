@@ -19,7 +19,7 @@ watch(
 <template>
   <dialog ref="dialogRef" class="processing-dialog" aria-live="polite">
     <div class="processing-content">
-      <div class="spinner" role="status" aria-label="Processing"></div>
+      <div class="spinner" role="status" aria-label="処理中"></div>
       <p class="processing-message">{{ message }}</p>
     </div>
   </dialog>

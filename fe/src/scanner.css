@@ -574,6 +574,113 @@ body {
   display: none;
 }
 
+/* ── Scan data (申請書) form view ────────────────────────────────────── */
+
+.scan-form-note {
+  margin: 0 0 0.75rem;
+  color: #9aa1ab;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.scan-form-title {
+  margin-bottom: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #3a3f47;
+  border-radius: 10px;
+  background: #1c1f24;
+}
+
+.scan-form-title h3 {
+  margin: 0 0 0.6rem;
+  font-size: 1rem;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.scan-form-section {
+  margin-bottom: 1rem;
+  border: 1px solid #2a2e35;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.scan-form-section-title {
+  margin: 0;
+  padding: 0.55rem 0.85rem;
+  background: #1c1f24;
+  border-bottom: 1px solid #2a2e35;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #e6e8eb;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.scan-form-subhead {
+  margin: 0;
+  padding: 0.45rem 0.85rem;
+  background: #16181d;
+  border-top: 1px solid #2a2e35;
+  border-bottom: 1px solid #2a2e35;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #9aa1ab;
+}
+
+.scan-form-grid {
+  margin: 0;
+  padding: 0.35rem 0.85rem 0.5rem;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 0.85rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.scan-form-grid dt {
+  color: #9aa1ab;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid #22262c;
+}
+
+.scan-form-grid dd {
+  margin: 0;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid #22262c;
+  word-break: break-word;
+}
+
+.scan-form-grid dt:nth-last-of-type(1),
+.scan-form-grid dd:nth-last-of-type(1) {
+  border-bottom: none;
+}
+
+.scan-value-empty {
+  color: #6b7280;
+}
+
+.submit-error {
+  margin: 0;
+  padding: 0.5rem 1rem 0;
+  color: #fca5a5;
+  font-size: 0.85rem;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+@media (max-width: 380px) {
+  .scan-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .scan-form-grid dt {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+}
+
 /* ── Desktop: centered camera stage ──────────────────────────────────── */
 
 @media (min-width: 769px) {

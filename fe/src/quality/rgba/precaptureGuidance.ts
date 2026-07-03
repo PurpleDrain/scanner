@@ -24,6 +24,9 @@ export interface PrecaptureFrame {
   height: number;
 }
 
+export const HINT_HOLD_FLATTER = "紙の真上から、スマホを水平に構えてください。";
+export const HINT_MOVE_CLOSER = "もう少しカメラを近づけると、文字がはっきり写ります。";
+
 /**
  * Lightweight, geometry-only guidance for the live preview. Focuses the user on
  * the two levers they control before capture: shooting angle (perspective) and
@@ -46,13 +49,13 @@ export function precaptureGuidance(
 
   const hints: string[] = [];
   if (perspective.perspectiveScore < config.guidance.weakScoreThreshold) {
-    hints.push("Hold the phone flatter — directly above the page.");
+    hints.push(HINT_HOLD_FLATTER);
   }
   const tooLittleDetail =
     resolution.resolutionScore < config.guidance.weakScoreThreshold ||
     (frameFill !== null && frameFill < config.guidance.minFrameFill);
   if (tooLittleDetail) {
-    hints.push("Bring the camera closer to capture more detail.");
+    hints.push(HINT_MOVE_CLOSER);
   }
 
   return {

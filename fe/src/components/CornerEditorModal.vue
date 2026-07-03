@@ -56,19 +56,19 @@ defineExpose({ initEditor, getQuad });
 <template>
   <dialog ref="dialogRef" class="app-modal app-modal-full">
     <div class="modal-header">
-      <h2>Adjust corners</h2>
-      <button class="icon-btn modal-close" type="button" aria-label="Cancel" @click="$emit('close')">
+      <h2>四隅の調整</h2>
+      <button class="icon-btn modal-close" type="button" aria-label="キャンセル" @click="$emit('close')">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <path d="M18 6L6 18M6 6l12 12" />
         </svg>
       </button>
     </div>
-    <p class="editor-hint">Drag the corners to match the document edges.</p>
+    <p class="editor-hint">書類の四隅に合わせて、印をドラッグして調整してください。</p>
     <div ref="editorBodyRef" class="modal-body editor-body">
       <canvas ref="canvasRef" class="editor-canvas"></canvas>
     </div>
     <footer class="modal-footer">
-      <button class="primary-btn" type="button" :disabled="isFlattening" @click="$emit('flatten')">Flatten</button>
+      <button class="primary-btn" type="button" :disabled="isFlattening" @click="$emit('flatten')">補正して切り出す</button>
     </footer>
   </dialog>
 </template>

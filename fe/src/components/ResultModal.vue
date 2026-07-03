@@ -7,11 +7,14 @@ const props = defineProps<{
   open: boolean;
   quality: DocumentQualityResult | null;
   enhanced: boolean;
+  submitting: boolean;
+  submitError: string | null;
 }>();
 
 const emit = defineEmits<{
   close: [];
   "update:enhanced": [value: boolean];
+  submit: [blob: Blob];
 }>();
 
 const dialogRef = ref<HTMLDialogElement | null>(null);
@@ -65,7 +68,19 @@ function gradeText(q: DocumentQualityResult | null): string {
 
 function recommendations(q: DocumentQualityResult | null): string[] {
   if (!q) return [];
-  return q.recommendations.length ? q.recommendations : ["Looks good — no issues detected."];
+  return q.recommendations.length ? q.recommendations : ["きれいに読み取れました。問題はありません。"];
+}
+
+function onSubmit(): void {
+  const canvas = resultCanvasRef.value;
+  if (!canvas || props.submitting) return;
+  canvas.toBlob(
+    (blob) => {
+      if (blob) emit("submit", blob);
+    },
+    "image/jpeg",
+    0.95,
+  );
 }
 
 defineExpose({ showResult });
@@ -74,8 +89,8 @@ defineExpose({ showResult });
 <template>
   <dialog ref="dialogRef" class="app-modal app-modal-full">
     <div class="modal-header">
-      <h2>Scan result</h2>
-      <button class="icon-btn modal-close" type="button" aria-label="Done" @click="$emit('close')">
+      <h2>スキャン結果</h2>
+      <button class="icon-btn modal-close" type="button" aria-label="閉じる" @click="$emit('close')">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <path d="M18 6L6 18M6 6l12 12" />
         </svg>
@@ -90,7 +105,7 @@ defineExpose({ showResult });
             :checked="enhanced"
             @change="$emit('update:enhanced', ($event.target as HTMLInputElement).checked)"
           />
-          Enhance for OCR
+          読み取り用に補正する
         </label>
       </div>
       <ul v-if="quality && recommendations(quality).length" class="quality-recommendations">
@@ -100,10 +115,12 @@ defineExpose({ showResult });
         <canvas ref="resultCanvasRef" class="result-canvas"></canvas>
       </div>
     </div>
+    <p v-if="submitError" class="submit-error" role="alert">{{ submitError }}</p>
     <footer class="modal-footer result-footer">
-      <a :href="downloadJpegHref" :download="downloadJpegName" class="secondary-btn download-btn">Download JPEG</a>
-      <a :href="downloadPngHref" :download="downloadPngName" class="secondary-btn download-btn">Download PNG</a>
-      <button class="primary-btn" type="button" @click="$emit('close')">Done</button>
+      <a :href="downloadJpegHref" :download="downloadJpegName" class="secondary-btn download-btn">JPEGを保存</a>
+      <a :href="downloadPngHref" :download="downloadPngName" class="secondary-btn download-btn">PNGを保存</a>
+      <button class="secondary-btn" type="button" @click="$emit('close')">閉じる</button>
+      <button class="primary-btn" type="button" :disabled="submitting" @click="onSubmit">読み取りへ進む</button>
     </footer>
   </dialog>
 </template>

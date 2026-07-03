@@ -76,25 +76,25 @@ export function useCapture(deps: {
 
   async function captureAndFlatten(videoEl: HTMLVideoElement): Promise<EditorStill | null> {
     if (!canUseShutter()) {
-      deps.setStatus("Point the camera at a document within the frame.");
+      deps.setStatus("枠の中に書類が入るように、カメラを向けてください。");
       return null;
     }
     const fallbackQuad = getLastWebcamQuad()!;
-    deps.beginProcessing("Capturing…");
+    deps.beginProcessing("撮影しています…");
     try {
       const still = freezeFrame(videoEl, videoEl.videoWidth, videoEl.videoHeight);
       captureSrcWidth.value = still.width;
       captureSrcHeight.value = still.height;
-      deps.updateProcessingMessage("Refining corners…");
+      deps.updateProcessingMessage("四隅を調整しています…");
       captureResult.value = await detectAtCaptureResolution(still, still.width, still.height);
       const quad = captureResult.value.quad ?? fallbackQuad;
       if (!quad) {
-        deps.setStatus("No document edges found — try repositioning and capture again.");
+        deps.setStatus("書類の端を見つけられませんでした。位置を少し変えて、もう一度撮影をお願いします。");
         return null;
       }
       return { canvas: still, width: still.width, height: still.height, quad };
     } catch {
-      deps.setStatus("Detection failed — try again.");
+      deps.setStatus("うまく読み取れませんでした。お手数ですが、もう一度お試しください。");
       return null;
     } finally {
       deps.endProcessing();
@@ -112,11 +112,11 @@ export function useCapture(deps: {
 
   async function handleFileSelected(file: File): Promise<EditorStill | null> {
     activeMode.value = "upload";
-    deps.beginProcessing("Loading image…");
+    deps.beginProcessing("画像を読み込んでいます…");
     try {
       const image = await loadImageFile(file);
       const previewScale = Math.min(1, UPLOAD_PREVIEW_MAX_WIDTH / image.width);
-      deps.updateProcessingMessage("Detecting document…");
+      deps.updateProcessingMessage("書類を検出しています…");
       renderUploadPreview(image, previewScale, null);
       captureResult.value = await detectAtCaptureResolution(image, image.width, image.height);
       captureSrcWidth.value = image.width;
@@ -124,16 +124,16 @@ export function useCapture(deps: {
       renderUploadPreview(image, previewScale, captureResult.value);
       const quad = captureResult.value.quad;
       if (!quad) {
-        deps.setStatus("No document edges found — try another image.");
+        deps.setStatus("書類の端を見つけられませんでした。別の画像でお試しください。");
         activeMode.value = "webcam";
         return null;
       }
-      const conf = captureResult.value.confidence ? ` (confidence ${captureResult.value.confidence.value.toFixed(2)})` : "";
-      deps.setStatus(`Document detected${conf}.`);
+      const conf = captureResult.value.confidence ? `（確度 ${captureResult.value.confidence.value.toFixed(2)}）` : "";
+      deps.setStatus(`書類を検出しました${conf}。`);
       const still = freezeFrame(image, image.width, image.height);
       return { canvas: still, width: image.width, height: image.height, quad };
     } catch {
-      deps.setStatus("Detection failed for this image.");
+      deps.setStatus("この画像からは読み取れませんでした。別の画像でお試しください。");
       activeMode.value = "webcam";
       return null;
     } finally {
