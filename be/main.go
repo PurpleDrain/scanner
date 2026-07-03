@@ -173,6 +173,5 @@ func newGenerateContentConfig() *genai.GenerateContentConfig {
 			ThinkingLevel:   genai.ThinkingLevelHigh,
 			IncludeThoughts: true,
 		},
-		//ResponseSchema:    documentResponseSchema(),
 	}
 }
